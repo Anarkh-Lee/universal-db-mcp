@@ -1,0 +1,39 @@
+# 源代码文件（只发布编译后的 dist 目录）
+src/
+*.ts
+!*.d.ts
+
+# 开发文件
+tsconfig.json
+.claude/
+.vscode/
+.idea/
+
+# 测试文件
+src/test.ts
+dist/test.*
+test.js
+test.d.ts
+
+# Git 相关
+.git/
+.gitignore
+
+# 依赖
+node_modules/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 临时文件
+*.tmp
+*.swp
+.DS_Store
+
+# 构建产物（保留 dist 目录）
+*.tsbuildinfo
+
+# 环境变量
+.env
+.env.local

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm run build)",
+      "Bash(tree:*)",
+      "Bash(node:*)",
+      "Bash(npm view universal-db-mcp)",
+      "Bash(npm pack --dry-run)",
+      "Bash(npm pack)",
+      "Bash(npm whoami:*)"
+    ]
+  }
+}
