@@ -17,7 +17,7 @@ export interface DbAdapter {
 
   /**
    * 执行查询语句
-   * @param query - SQL 查询语句或 Redis 命令
+   * @param query - SQL 查询语句、Redis 命令或 MongoDB 查询
    * @param params - 查询参数（用于防止 SQL 注入）
    * @returns 查询结果
    */
@@ -56,7 +56,7 @@ export interface QueryResult {
  */
 export interface SchemaInfo {
   /** 数据库类型 */
-  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver';
+  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb';
   /** 数据库名称 */
   databaseName: string;
   /** 表信息列表 */
@@ -113,7 +113,7 @@ export interface IndexInfo {
  * 数据库连接配置
  */
 export interface DbConfig {
-  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver';
+  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb';
   host: string;
   port: number;
   user?: string;

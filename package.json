@@ -27,6 +27,8 @@
     "sqlserver",
     "mssql",
     "sql-server",
+    "mongodb",
+    "mongo",
     "数据库",
     "AI"
   ],
@@ -48,6 +50,7 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "commander": "^12.1.0",
     "ioredis": "^5.4.2",
+    "mongodb": "^6.21.0",
     "mssql": "^12.2.0",
     "mysql2": "^3.11.5",
     "oracledb": "^6.7.0",

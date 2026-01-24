@@ -8,6 +8,9 @@
 - [PostgreSQL 使用示例](#postgresql-使用示例)
 - [Redis 使用示例](#redis-使用示例)
 - [Oracle 使用示例](#oracle-使用示例)
+- [达梦 使用示例](#达梦-使用示例)
+- [SQL Server 使用示例](#sql-server-使用示例)
+- [MongoDB 使用示例](#mongodb-使用示例)
 - [Claude Desktop 配置示例](#claude-desktop-配置示例)
 - [常见使用场景](#常见使用场景)
 
@@ -460,7 +463,187 @@ npm install -g dmdb
 3. **加密连接**: 连接 Azure SQL 时会自动启用加密，本地 SQL Server 默认不加密
 4. **数据库名**: 必须指定数据库名（如 master、tempdb 或自定义数据库）
 5. **权限**: 确保用户有足够的权限访问系统视图（INFORMATION_SCHEMA）
-6. **参数化查询**: 支持 `?` 占位符，会自动转换为 SQL Server 的 `@param0` 语法
+6. **参数化查询**: 支持 `?` 占位符,会自动转换为 SQL Server 的 `@param0` 语法
+
+---
+
+## MongoDB 使用示例
+
+### 基础配置（只读模式）
+
+```json
+{
+  "mcpServers": {
+    "mongodb-db": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "mongodb",
+        "--host", "localhost",
+        "--port", "27017",
+        "--user", "admin",
+        "--password", "your_password",
+        "--database", "myapp"
+      ]
+    }
+  }
+}
+```
+
+### 无认证连接（开发环境）
+
+```json
+{
+  "mcpServers": {
+    "mongodb-local": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "mongodb",
+        "--host", "localhost",
+        "--port", "27017",
+        "--database", "test"
+      ]
+    }
+  }
+}
+```
+
+### 启用写入模式
+
+```json
+{
+  "mcpServers": {
+    "mongodb-write": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "mongodb",
+        "--host", "localhost",
+        "--port", "27017",
+        "--user", "dev_user",
+        "--password", "dev_password",
+        "--database", "development",
+        "--danger-allow-write"
+      ]
+    }
+  }
+}
+```
+
+### 连接 MongoDB Atlas
+
+```json
+{
+  "mcpServers": {
+    "mongodb-atlas": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "mongodb",
+        "--host", "cluster0.xxxxx.mongodb.net",
+        "--port", "27017",
+        "--user", "myuser",
+        "--password", "mypassword",
+        "--database", "production"
+      ]
+    }
+  }
+}
+```
+
+### 查询格式
+
+MongoDB 适配器支持两种查询格式：
+
+#### 1. JSON 格式（推荐）
+
+```json
+{
+  "collection": "users",
+  "operation": "find",
+  "query": {"age": {"$gt": 18}},
+  "options": {"limit": 10}
+}
+```
+
+#### 2. 简化格式
+
+```javascript
+db.users.find({"age": {"$gt": 18}})
+```
+
+### 与 Claude 对话示例
+
+**用户**: 查看数据库中有哪些集合？
+
+**Claude 会自动**:
+1. 调用 `get_schema` 工具
+2. 返回所有集合的列表和基本信息
+3. 显示每个集合的文档数量和推断的字段结构
+
+**用户**: 查询 users 集合中年龄大于 18 的用户
+
+**Claude 会自动**:
+1. 生成查询: `{"collection": "users", "operation": "find", "query": {"age": {"$gt": 18}}}`
+2. 执行并返回结果
+
+**用户**: 统计每个城市的用户数量
+
+**Claude 会自动**:
+1. 理解需求
+2. 生成聚合查询:
+```json
+{
+  "collection": "users",
+  "operation": "aggregate",
+  "pipeline": [
+    {"$group": {"_id": "$city", "count": {"$sum": 1}}},
+    {"$sort": {"count": -1}}
+  ]
+}
+```
+3. 执行并返回结果
+
+**用户**: 查找最近创建的 10 个订单
+
+**Claude 会自动**:
+1. 生成查询:
+```json
+{
+  "collection": "orders",
+  "operation": "find",
+  "query": {},
+  "options": {"sort": {"createdAt": -1}, "limit": 10}
+}
+```
+2. 执行并返回结果
+
+### 支持的操作
+
+#### 查询操作（只读模式）
+- `find` - 查询文档
+- `findOne` - 查询单个文档
+- `count` / `countDocuments` - 统计文档数量
+- `distinct` - 获取字段的不同值
+- `aggregate` - 聚合管道查询
+
+#### 写入操作（需要 --danger-allow-write）
+- `insert` / `insertOne` - 插入单个文档
+- `insertMany` - 插入多个文档
+- `update` / `updateOne` - 更新单个文档
+- `updateMany` - 更新多个文档
+- `delete` / `deleteOne` - 删除单个文档
+- `deleteMany` - 删除多个文档
+
+### 注意事项
+
+1. **默认端口**: MongoDB 默认端口为 27017
+2. **认证**: 支持用户名/密码认证，默认认证数据库为 admin
+3. **集合结构**: MongoDB 是无模式数据库，Schema 信息通过采样文档推断
+4. **ObjectId**: 查询结果中的 ObjectId 会自动转换为字符串
+5. **查询语法**: 使用 MongoDB 原生查询语法，不是 SQL
+6. **聚合管道**: 支持完整的聚合管道功能
 
 ---
 

@@ -17,7 +17,8 @@
       "Bash(chcp 65001)",
       "Bash(findstr:*)",
       "Bash(python:*)",
-      "Bash(npm view mssql version)"
+      "Bash(npm view mssql version)",
+      "Bash(npm install mongodb)"
     ]
   }
 }
