@@ -19,7 +19,7 @@
 
 ✅ **智能表结构理解** - 自动获取数据库 Schema，提供精准建议
 
-✅ **多数据库支持** - MySQL、PostgreSQL、Redis、Oracle、达梦、SQL Server、MongoDB、SQLite、KingbaseES、GaussDB/OpenGauss 一键切换
+✅ **多数据库支持** - MySQL、PostgreSQL、Redis、Oracle、达梦、SQL Server、MongoDB、SQLite、KingbaseES、GaussDB/OpenGauss、OceanBase 一键切换
 
 ✅ **安全第一** - 默认只读模式，防止误操作删库
 
@@ -33,7 +33,7 @@
 
 - Node.js >= 20
 - Claude Desktop 应用
-- 至少一个数据库实例（MySQL/PostgreSQL/Redis/Oracle/达梦/SQL Server/MongoDB/SQLite/KingbaseES/GaussDB）
+- 至少一个数据库实例（MySQL/PostgreSQL/Redis/Oracle/达梦/SQL Server/MongoDB/SQLite/KingbaseES/GaussDB/OceanBase）
 
 ### 安装
 
@@ -153,6 +153,33 @@ npx universal-db-mcp
 - 可以使用 `--type gaussdb` 或 `--type opengauss`
 - 使用与 PostgreSQL 相同的驱动（pg）
 
+#### OceanBase 示例
+
+```json
+{
+  "mcpServers": {
+    "oceanbase-db": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "oceanbase",
+        "--host", "localhost",
+        "--port", "2881",
+        "--user", "root@test",
+        "--password", "your_password",
+        "--database", "test"
+      ]
+    }
+  }
+}
+```
+
+**说明**：
+- OceanBase 兼容 MySQL 协议
+- 默认端口为 2881（直连端口）或 2883（代理端口）
+- 用户名格式：`用户名@租户名`（如 `root@test`）
+- 使用与 MySQL 相同的驱动（mysql2）
+
 ### 启动使用
 
 1. 重启 Claude Desktop
@@ -196,6 +223,7 @@ Claude 会自动调用数据库工具完成查询！
 | SQLite | `--type sqlite` | - | ✅ 已支持 | 本地文件数据库 |
 | KingbaseES（人大金仓） | `--type kingbase` | 54321 | ✅ 已支持 | 兼容 PostgreSQL 协议 |
 | GaussDB / OpenGauss | `--type gaussdb` 或 `--type opengauss` | 5432 | ✅ 已支持 | 华为高斯数据库，兼容 PostgreSQL |
+| OceanBase | `--type oceanbase` | 2881 | ✅ 已支持 | 蚂蚁金服分布式数据库，兼容 MySQL |
 
 **注意**:
 - 达梦数据库驱动 `dmdb` 会作为可选依赖自动安装。如果安装失败，请手动运行 `npm install -g dmdb`。
@@ -207,7 +235,7 @@ Claude 会自动调用数据库工具完成查询！
 universal-db-mcp [选项]
 
 选项：
-  --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite|kingbase|gaussdb|opengauss)
+  --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite|kingbase|gaussdb|opengauss|oceanbase)
   --host <host>            数据库主机地址 (默认: localhost)
   --port <port>            数据库端口
   --user <user>            用户名
@@ -234,7 +262,8 @@ src/
 │   ├── mongodb.ts
 │   ├── sqlite.ts
 │   ├── kingbase.ts
-│   └── gaussdb.ts
+│   ├── gaussdb.ts
+│   └── oceanbase.ts
 ├── types/             # TypeScript 类型定义
 │   └── adapter.ts
 ├── utils/             # 工具函数
