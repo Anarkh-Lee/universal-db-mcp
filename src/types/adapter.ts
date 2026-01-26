@@ -56,7 +56,7 @@ export interface QueryResult {
  */
 export interface SchemaInfo {
   /** 数据库类型 */
-  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb';
+  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite';
   /** 数据库名称 */
   databaseName: string;
   /** 表信息列表 */
@@ -113,12 +113,14 @@ export interface IndexInfo {
  * 数据库连接配置
  */
 export interface DbConfig {
-  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb';
-  host: string;
-  port: number;
+  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite';
+  host?: string;
+  port?: number;
   user?: string;
   password?: string;
   database?: string;
+  /** SQLite 数据库文件路径 */
+  filePath?: string;
   /** 是否允许写操作（默认 false，只读模式） */
   allowWrite?: boolean;
 }

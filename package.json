@@ -29,6 +29,7 @@
     "sql-server",
     "mongodb",
     "mongo",
+    "sqlite",
     "数据库",
     "AI"
   ],
@@ -48,6 +49,7 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.8.1",
     "commander": "^12.1.0",
     "ioredis": "^5.4.2",
     "mongodb": "^5.9.2",
@@ -58,6 +60,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/mssql": "^9.1.5",
     "@types/node": "^22.10.5",
     "@types/oracledb": "^6.5.1",

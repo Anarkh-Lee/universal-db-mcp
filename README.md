@@ -19,7 +19,7 @@
 
 ✅ **智能表结构理解** - 自动获取数据库 Schema，提供精准建议
 
-✅ **多数据库支持** - MySQL、PostgreSQL、Redis、Oracle、达梦、SQL Server、MongoDB 一键切换
+✅ **多数据库支持** - MySQL、PostgreSQL、Redis、Oracle、达梦、SQL Server、MongoDB、SQLite 一键切换
 
 ✅ **安全第一** - 默认只读模式，防止误操作删库
 
@@ -33,7 +33,7 @@
 
 - Node.js >= 20
 - Claude Desktop 应用
-- 至少一个数据库实例（MySQL/PostgreSQL/Redis/Oracle/达梦/SQL Server/MongoDB）
+- 至少一个数据库实例（MySQL/PostgreSQL/Redis/Oracle/达梦/SQL Server/MongoDB/SQLite）
 
 ### 安装
 
@@ -56,6 +56,8 @@ npx universal-db-mcp
 
 添加以下配置：
 
+#### MySQL 示例
+
 ```json
 {
   "mcpServers": {
@@ -74,6 +76,29 @@ npx universal-db-mcp
   }
 }
 ```
+
+#### SQLite 示例
+
+```json
+{
+  "mcpServers": {
+    "universal-db-sqlite": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "/path/to/your/database.db"
+      ]
+    }
+  }
+}
+```
+
+**注意**：
+- SQLite 不需要 `--host`、`--port`、`--user`、`--password` 参数
+- 使用 `--file` 参数指定数据库文件的绝对路径
+- Windows 路径示例：`"C:\\Users\\YourName\\data\\mydb.db"`
+- macOS/Linux 路径示例：`"/Users/YourName/data/mydb.db"`
 
 ### 启动使用
 
@@ -115,9 +140,11 @@ Claude 会自动调用数据库工具完成查询！
 | 达梦（DM7/DM8） | `--type dm` | 5236 | ✅ 已支持 | 驱动自动安装 |
 | SQL Server (2012+) | `--type sqlserver` 或 `--type mssql` | 1433 | ✅ 已支持 | 支持 Azure SQL Database |
 | MongoDB | `--type mongodb` | 27017 | ✅ 已支持 | 支持 MongoDB 4.0+ |
-| SQLite | `--type sqlite` | - | 🚧 计划中 | - |
+| SQLite | `--type sqlite` | - | ✅ 已支持 | 本地文件数据库 |
 
-**注意**: 达梦数据库驱动 `dmdb` 会作为可选依赖自动安装。如果安装失败，请手动运行 `npm install -g dmdb`。
+**注意**:
+- 达梦数据库驱动 `dmdb` 会作为可选依赖自动安装。如果安装失败，请手动运行 `npm install -g dmdb`。
+- SQLite 驱动 `better-sqlite3` 需要编译。在 Windows 上，需要安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)。如果安装失败，可以使用预编译版本或在支持的平台上使用。
 
 ## 🔧 命令行参数
 
@@ -125,12 +152,13 @@ Claude 会自动调用数据库工具完成查询！
 universal-db-mcp [选项]
 
 选项：
-  --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb)
+  --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite)
   --host <host>            数据库主机地址 (默认: localhost)
   --port <port>            数据库端口
   --user <user>            用户名
   --password <password>    密码
   --database <database>    数据库名称
+  --file <file>            SQLite 数据库文件路径
   --danger-allow-write     启用写入模式（危险！）
   --help                   显示帮助信息
 ```
@@ -148,7 +176,8 @@ src/
 │   ├── oracle.ts
 │   ├── dm.ts
 │   ├── sqlserver.ts
-│   └── mongodb.ts
+│   ├── mongodb.ts
+│   └── sqlite.ts
 ├── types/             # TypeScript 类型定义
 │   └── adapter.ts
 ├── utils/             # 工具函数

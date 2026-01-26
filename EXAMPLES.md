@@ -11,6 +11,7 @@
 - [达梦 使用示例](#达梦-使用示例)
 - [SQL Server 使用示例](#sql-server-使用示例)
 - [MongoDB 使用示例](#mongodb-使用示例)
+- [SQLite 使用示例](#sqlite-使用示例)
 - [Claude Desktop 配置示例](#claude-desktop-配置示例)
 - [常见使用场景](#常见使用场景)
 
@@ -648,6 +649,174 @@ db.users.find({"age": {"$gt": 18}})
 
 ---
 
+## SQLite 使用示例
+
+### 基础配置（只读模式）
+
+```json
+{
+  "mcpServers": {
+    "sqlite-local": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "/path/to/your/database.db"
+      ]
+    }
+  }
+}
+```
+
+### Windows 路径示例
+
+```json
+{
+  "mcpServers": {
+    "sqlite-app": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "C:\\Users\\YourName\\Documents\\myapp.db"
+      ]
+    }
+  }
+}
+```
+
+**注意**: Windows 路径中的反斜杠需要转义（使用 `\\`）。
+
+### macOS/Linux 路径示例
+
+```json
+{
+  "mcpServers": {
+    "sqlite-notes": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "/Users/YourName/Documents/notes.db"
+      ]
+    }
+  }
+}
+```
+
+### 启用写入模式
+
+```json
+{
+  "mcpServers": {
+    "sqlite-dev": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "/path/to/dev.db",
+        "--danger-allow-write"
+      ]
+    }
+  }
+}
+```
+
+### 与 Claude 对话示例
+
+**用户**: 查看数据库中有哪些表？
+
+**Claude 会自动**:
+1. 调用 `get_schema` 工具
+2. 执行查询: `SELECT name FROM sqlite_master WHERE type='table'`
+3. 返回表列表
+
+**用户**: 查看 users 表的结构
+
+**Claude 会自动**:
+1. 调用 `get_table_info` 工具
+2. 执行 `PRAGMA table_info(users)`
+3. 返回列信息、主键、索引等详细信息
+
+**用户**: 统计每个分类的文章数量
+
+**Claude 会自动**:
+1. 理解需求
+2. 生成 SQL: `SELECT category, COUNT(*) as count FROM articles GROUP BY category ORDER BY count DESC`
+3. 执行并返回结果
+
+**用户**: 查找最近创建的 10 条记录
+
+**Claude 会自动**:
+1. 生成 SQL: `SELECT * FROM posts ORDER BY created_at DESC LIMIT 10`
+2. 执行并返回结果
+
+### 常见使用场景
+
+#### 1. 分析本地应用数据库
+
+许多桌面应用使用 SQLite 存储数据（如浏览器历史、笔记应用等）：
+
+```
+用户: 帮我分析 Chrome 浏览器的历史记录
+
+Claude 会:
+1. 连接到 Chrome 的 History 数据库文件
+2. 查询 urls 和 visits 表
+3. 生成访问统计和分析报告
+```
+
+#### 2. 开发和测试
+
+SQLite 非常适合本地开发和测试：
+
+```
+用户: 创建一个测试用户并查询
+
+Claude 会（在写入模式下）:
+1. INSERT INTO users (name, email) VALUES ('Test User', 'test@example.com')
+2. SELECT * FROM users WHERE email = 'test@example.com'
+```
+
+#### 3. 数据导出和备份
+
+```
+用户: 导出所有用户数据为 JSON 格式
+
+Claude 会:
+1. SELECT * FROM users
+2. 将结果格式化为 JSON
+3. 提供下载或复制
+```
+
+### 注意事项
+
+1. **文件路径**: 必须使用绝对路径，不支持相对路径
+2. **文件权限**: 确保 Claude Desktop 有权限读取/写入数据库文件
+3. **并发访问**: SQLite 支持多读单写，注意并发访问限制
+4. **数据库锁**: 如果数据库被其他程序占用，可能会遇到锁定错误
+5. **自动创建**: 如果指定的文件不存在，会自动创建新数据库
+6. **备份建议**: 在启用写入模式前，建议先备份数据库文件
+
+### 支持的 SQLite 特性
+
+- ✅ 标准 SQL 查询（SELECT、INSERT、UPDATE、DELETE）
+- ✅ 事务支持
+- ✅ 索引和主键
+- ✅ 外键约束（需要启用）
+- ✅ PRAGMA 命令
+- ✅ 全文搜索（FTS）
+- ✅ JSON 扩展（SQLite 3.38+）
+
+### 性能提示
+
+1. **索引优化**: 为常用查询字段创建索引
+2. **批量操作**: 使用事务包装批量 INSERT/UPDATE
+3. **PRAGMA 优化**: 可以使用 PRAGMA 命令调整性能参数
+4. **VACUUM**: 定期执行 VACUUM 优化数据库文件大小
+
+---
+
 ## Claude Desktop 配置示例
 
 ### 同时连接多个数据库
@@ -702,6 +871,14 @@ db.users.find({"age": {"$gt": 18}})
         "--password", "warehouse_password",
         "--database", "DWH"
       ]
+    },
+    "sqlite-local": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "sqlite",
+        "--file", "/Users/yourname/data/local.db"
+      ]
     }
   }
 }
@@ -713,6 +890,7 @@ db.users.find({"age": {"$gt": 18}})
 - "从 PostgreSQL 分析库获取..."
 - "检查 Redis 缓存中的..."
 - "在 Oracle 数据仓库中统计..."
+- "从 SQLite 本地数据库查询..."
 
 ---
 
