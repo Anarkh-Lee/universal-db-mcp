@@ -12,6 +12,7 @@
 - [SQL Server 使用示例](#sql-server-使用示例)
 - [MongoDB 使用示例](#mongodb-使用示例)
 - [SQLite 使用示例](#sqlite-使用示例)
+- [KingbaseES 使用示例](#kingbasees-使用示例)
 - [Claude Desktop 配置示例](#claude-desktop-配置示例)
 - [常见使用场景](#常见使用场景)
 
@@ -817,6 +818,153 @@ Claude 会:
 
 ---
 
+## KingbaseES 使用示例
+
+### 基础配置（只读模式）
+
+```json
+{
+  "mcpServers": {
+    "kingbase-db": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "kingbase",
+        "--host", "localhost",
+        "--port", "54321",
+        "--user", "system",
+        "--password", "your_password",
+        "--database", "test"
+      ]
+    }
+  }
+}
+```
+
+### 启用写入模式
+
+```json
+{
+  "mcpServers": {
+    "kingbase-write": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "kingbase",
+        "--host", "localhost",
+        "--port", "54321",
+        "--user", "system",
+        "--password", "your_password",
+        "--database", "mydb",
+        "--danger-allow-write"
+      ]
+    }
+  }
+}
+```
+
+### 连接远程 KingbaseES
+
+```json
+{
+  "mcpServers": {
+    "kingbase-prod": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "kingbase",
+        "--host", "kingbase.example.com",
+        "--port", "54321",
+        "--user", "readonly_user",
+        "--password", "secure_password",
+        "--database", "production"
+      ]
+    }
+  }
+}
+```
+
+### 与 Claude 对话示例
+
+**用户**: 查看数据库中有哪些表？
+
+**Claude 会自动**:
+1. 调用 `get_schema` 工具
+2. 执行查询获取 public schema 下的所有表
+3. 返回表列表
+
+**用户**: 查看 users 表的结构
+
+**Claude 会自动**:
+1. 调用 `get_table_info` 工具
+2. 返回列信息、主键、索引等详细信息
+
+**用户**: 统计每个部门的员工数量
+
+**Claude 会自动**:
+1. 理解需求
+2. 生成 SQL: `SELECT department_id, COUNT(*) as count FROM employees GROUP BY department_id ORDER BY count DESC`
+3. 执行并返回结果
+
+**用户**: 查找最近一周创建的订单
+
+**Claude 会自动**:
+1. 生成 SQL: `SELECT * FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' ORDER BY created_at DESC`
+2. 执行并返回结果
+
+### 注意事项
+
+1. **默认端口**: KingbaseES 默认端口为 54321
+2. **兼容性**: 基于 PostgreSQL 开发，兼容 PostgreSQL 协议和 SQL 语法
+3. **驱动**: 使用 PostgreSQL 的 `pg` 驱动
+4. **Schema**: 默认查询 public schema 下的表
+5. **参数化查询**: 支持 `$1, $2, ...` 占位符
+6. **国产化**: 适用于国产化替代场景
+
+### 支持的 KingbaseES 版本
+
+- ✅ KingbaseES V8
+- ✅ KingbaseES V9
+- ✅ 其他兼容 PostgreSQL 协议的版本
+
+### 常见使用场景
+
+#### 1. 国产化数据库迁移
+
+从 PostgreSQL 迁移到 KingbaseES：
+
+```
+用户: 帮我分析现有表结构，准备迁移到 KingbaseES
+
+Claude 会:
+1. 获取完整的 Schema 信息
+2. 分析表结构、索引、约束
+3. 提供迁移建议
+```
+
+#### 2. 数据分析和报表
+
+```
+用户: 统计最近一个月的销售数据
+
+Claude 会:
+1. 理解需求
+2. 生成复杂的聚合查询
+3. 返回分析结果
+```
+
+#### 3. 开发和测试
+
+```
+用户: 在测试环境创建测试数据
+
+Claude 会（在写入模式下）:
+1. 生成 INSERT 语句
+2. 执行并验证结果
+```
+
+---
+
 ## Claude Desktop 配置示例
 
 ### 同时连接多个数据库
@@ -879,6 +1027,18 @@ Claude 会:
         "--type", "sqlite",
         "--file", "/Users/yourname/data/local.db"
       ]
+    },
+    "kingbase-db": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "kingbase",
+        "--host", "localhost",
+        "--port", "54321",
+        "--user", "system",
+        "--password", "your_password",
+        "--database", "test"
+      ]
     }
   }
 }
@@ -891,6 +1051,7 @@ Claude 会:
 - "检查 Redis 缓存中的..."
 - "在 Oracle 数据仓库中统计..."
 - "从 SQLite 本地数据库查询..."
+- "在 KingbaseES 数据库中查询..."
 
 ---
 

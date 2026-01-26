@@ -15,6 +15,7 @@ import { DMAdapter } from './adapters/dm.js';
 import { SQLServerAdapter } from './adapters/sqlserver.js';
 import { MongoDBAdapter } from './adapters/mongodb.js';
 import { SQLiteAdapter } from './adapters/sqlite.js';
+import { KingbaseAdapter } from './adapters/kingbase.js';
 
 const program = new Command();
 
@@ -22,7 +23,7 @@ program
   .name('universal-db-mcp')
   .description('MCP 数据库万能连接器 - 让 Claude Desktop 直接连接你的数据库')
   .version('0.1.0')
-  .requiredOption('--type <type>', '数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite)')
+  .requiredOption('--type <type>', '数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite|kingbase)')
   .option('--host <host>', '数据库主机地址')
   .option('--port <port>', '数据库端口', parseInt)
   .option('--user <user>', '用户名')
@@ -34,8 +35,8 @@ program
   .action(async (options) => {
     try {
       // 验证数据库类型
-      if (!['mysql', 'postgres', 'redis', 'oracle', 'dm', 'sqlserver', 'mssql', 'mongodb', 'sqlite'].includes(options.type)) {
-        console.error('❌ 错误: 不支持的数据库类型。支持的类型: mysql, postgres, redis, oracle, dm, sqlserver (或 mssql), mongodb, sqlite');
+      if (!['mysql', 'postgres', 'redis', 'oracle', 'dm', 'sqlserver', 'mssql', 'mongodb', 'sqlite', 'kingbase'].includes(options.type)) {
+        console.error('❌ 错误: 不支持的数据库类型。支持的类型: mysql, postgres, redis, oracle, dm, sqlserver (或 mssql), mongodb, sqlite, kingbase');
         process.exit(1);
       }
 
@@ -61,7 +62,7 @@ program
 
       // 构建配置
       const config: DbConfig = {
-        type: dbType as 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite',
+        type: dbType as 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite' | 'kingbase',
         host: options.host,
         port: options.port,
         user: options.user,
@@ -163,6 +164,16 @@ program
           adapter = new SQLiteAdapter({
             filePath: config.filePath!,
             readonly: !config.allowWrite,
+          });
+          break;
+
+        case 'kingbase':
+          adapter = new KingbaseAdapter({
+            host: config.host!,
+            port: config.port!,
+            user: config.user,
+            password: config.password,
+            database: config.database,
           });
           break;
 
