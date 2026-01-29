@@ -2,6 +2,8 @@
  * SQL Server 数据库适配器
  * 使用 mssql 驱动实现 DbAdapter 接口
  * 支持 SQL Server 2012+ 和 Azure SQL Database
+ *
+ * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
  */
 
 import sql from 'mssql';
@@ -165,7 +167,7 @@ export class SQLServerAdapter implements DbAdapter {
   }
 
   /**
-   * 获取数据库结构信息
+   * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.pool) {
@@ -181,32 +183,77 @@ export class SQLServerAdapter implements DbAdapter {
       const dbNameResult = await this.pool.request().query('SELECT DB_NAME() AS database_name');
       const databaseName = dbNameResult.recordset?.[0]?.database_name || 'unknown';
 
-      // 获取所有表（过滤系统表）
-      const tablesResult = await this.pool.request().query(`
-        SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
-        FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_TYPE = 'BASE TABLE'
-          AND TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
-          AND TABLE_SCHEMA = SCHEMA_NAME()
-        ORDER BY TABLE_SCHEMA, TABLE_NAME
+      // 批量获取所有表的列信息
+      const allColumnsResult = await this.pool.request().query(`
+        SELECT
+          c.TABLE_NAME,
+          c.COLUMN_NAME,
+          c.DATA_TYPE,
+          c.CHARACTER_MAXIMUM_LENGTH,
+          c.NUMERIC_PRECISION,
+          c.NUMERIC_SCALE,
+          c.IS_NULLABLE,
+          c.COLUMN_DEFAULT,
+          c.ORDINAL_POSITION
+        FROM INFORMATION_SCHEMA.COLUMNS c
+        JOIN INFORMATION_SCHEMA.TABLES t
+          ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME
+        WHERE t.TABLE_TYPE = 'BASE TABLE'
+          AND t.TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
+          AND t.TABLE_SCHEMA = SCHEMA_NAME()
+        ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
       `);
 
-      const tableInfos: TableInfo[] = [];
+      // 批量获取所有表的主键信息
+      const allPrimaryKeysResult = await this.pool.request().query(`
+        SELECT
+          tc.TABLE_NAME,
+          c.COLUMN_NAME
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE c
+          ON tc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
+        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+          AND tc.TABLE_SCHEMA = SCHEMA_NAME()
+        ORDER BY tc.TABLE_NAME
+      `);
 
-      if (tablesResult.recordset) {
-        for (const tableRow of tablesResult.recordset) {
-          const tableName = tableRow.TABLE_NAME;
-          const tableInfo = await this.getTableInfo(tableName);
-          tableInfos.push(tableInfo);
-        }
-      }
+      // 批量获取所有表的索引信息
+      const allIndexesResult = await this.pool.request().query(`
+        SELECT
+          t.name AS table_name,
+          i.name AS index_name,
+          c.name AS column_name,
+          i.is_unique
+        FROM sys.indexes i
+        INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        INNER JOIN sys.tables t ON i.object_id = t.object_id
+        WHERE i.is_primary_key = 0
+          AND i.type > 0
+          AND t.schema_id = SCHEMA_ID()
+        ORDER BY t.name, i.name, ic.key_ordinal
+      `);
 
-      return {
-        databaseType: 'sqlserver',
+      // 批量获取所有表的行数估算
+      const allStatsResult = await this.pool.request().query(`
+        SELECT
+          t.name AS table_name,
+          SUM(p.rows) AS row_count
+        FROM sys.partitions p
+        JOIN sys.tables t ON p.object_id = t.object_id
+        WHERE t.schema_id = SCHEMA_ID()
+          AND p.index_id IN (0, 1)
+        GROUP BY t.name
+      `);
+
+      return this.assembleSchema(
         databaseName,
-        tables: tableInfos,
         version,
-      };
+        allColumnsResult.recordset || [],
+        allPrimaryKeysResult.recordset || [],
+        allIndexesResult.recordset || [],
+        allStatsResult.recordset || []
+      );
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
@@ -215,119 +262,106 @@ export class SQLServerAdapter implements DbAdapter {
   }
 
   /**
-   * 获取单个表的详细信息
+   * 组装 Schema 信息
    */
-  private async getTableInfo(tableName: string): Promise<TableInfo> {
-    if (!this.pool) {
-      throw new Error('数据库未连接');
+  private assembleSchema(
+    databaseName: string,
+    version: string,
+    allColumns: any[],
+    allPrimaryKeys: any[],
+    allIndexes: any[],
+    allStats: any[]
+  ): SchemaInfo {
+    const columnsByTable = new Map<string, ColumnInfo[]>();
+
+    for (const col of allColumns) {
+      const tableName = col.TABLE_NAME;
+
+      if (!columnsByTable.has(tableName)) {
+        columnsByTable.set(tableName, []);
+      }
+
+      columnsByTable.get(tableName)!.push({
+        name: col.COLUMN_NAME.toLowerCase(),
+        type: this.formatSQLServerType(
+          col.DATA_TYPE,
+          col.CHARACTER_MAXIMUM_LENGTH,
+          col.NUMERIC_PRECISION,
+          col.NUMERIC_SCALE
+        ),
+        nullable: col.IS_NULLABLE === 'YES',
+        defaultValue: col.COLUMN_DEFAULT?.trim() || undefined,
+      });
     }
 
-    // 获取列信息
-    const columnsResult = await this.pool.request()
-      .input('param0', tableName)
-      .query(`
-        SELECT
-          c.COLUMN_NAME,
-          c.DATA_TYPE,
-          c.CHARACTER_MAXIMUM_LENGTH,
-          c.NUMERIC_PRECISION,
-          c.NUMERIC_SCALE,
-          c.IS_NULLABLE,
-          c.COLUMN_DEFAULT
-        FROM INFORMATION_SCHEMA.COLUMNS c
-        WHERE c.TABLE_NAME = @param0
-          AND c.TABLE_SCHEMA = SCHEMA_NAME()
-        ORDER BY c.ORDINAL_POSITION
-      `);
+    const primaryKeysByTable = new Map<string, string[]>();
+    for (const pk of allPrimaryKeys) {
+      const tableName = pk.TABLE_NAME;
+      if (!primaryKeysByTable.has(tableName)) {
+        primaryKeysByTable.set(tableName, []);
+      }
+      primaryKeysByTable.get(tableName)!.push(pk.COLUMN_NAME.toLowerCase());
+    }
 
-    const columnInfos: ColumnInfo[] = [];
-    if (columnsResult.recordset) {
-      for (const col of columnsResult.recordset) {
-        columnInfos.push({
-          name: col.COLUMN_NAME.toLowerCase(),
-          type: this.formatSQLServerType(
-            col.DATA_TYPE,
-            col.CHARACTER_MAXIMUM_LENGTH,
-            col.NUMERIC_PRECISION,
-            col.NUMERIC_SCALE
-          ),
-          nullable: col.IS_NULLABLE === 'YES',
-          defaultValue: col.COLUMN_DEFAULT?.trim() || undefined,
+    const indexesByTable = new Map<string, Map<string, { columns: string[]; unique: boolean }>>();
+
+    for (const idx of allIndexes) {
+      const tableName = idx.table_name;
+      const indexName = idx.index_name;
+
+      if (!indexesByTable.has(tableName)) {
+        indexesByTable.set(tableName, new Map());
+      }
+
+      const tableIndexes = indexesByTable.get(tableName)!;
+
+      if (!tableIndexes.has(indexName)) {
+        tableIndexes.set(indexName, {
+          columns: [],
+          unique: idx.is_unique,
         });
       }
+
+      tableIndexes.get(indexName)!.columns.push(idx.column_name.toLowerCase());
     }
 
-    // 获取主键
-    const primaryKeysResult = await this.pool.request()
-      .input('param0', tableName)
-      .query(`
-        SELECT c.COLUMN_NAME
-        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE c
-          ON tc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
-        WHERE tc.TABLE_NAME = @param0
-          AND tc.TABLE_SCHEMA = SCHEMA_NAME()
-          AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-        ORDER BY c.ORDINAL_POSITION
-      `);
+    const rowsByTable = new Map<string, number>();
+    for (const stat of allStats) {
+      rowsByTable.set(stat.table_name, stat.row_count || 0);
+    }
 
-    const primaryKeys: string[] = [];
-    if (primaryKeysResult.recordset) {
-      for (const row of primaryKeysResult.recordset) {
-        primaryKeys.push(row.COLUMN_NAME.toLowerCase());
+    const tableInfos: TableInfo[] = [];
+
+    for (const [tableName, columns] of columnsByTable.entries()) {
+      const tableIndexes = indexesByTable.get(tableName);
+      const indexInfos: IndexInfo[] = [];
+
+      if (tableIndexes) {
+        for (const [indexName, indexData] of tableIndexes.entries()) {
+          indexInfos.push({
+            name: indexName,
+            columns: indexData.columns,
+            unique: indexData.unique,
+          });
+        }
       }
+
+      tableInfos.push({
+        name: tableName.toLowerCase(),
+        columns,
+        primaryKeys: primaryKeysByTable.get(tableName) || [],
+        indexes: indexInfos,
+        estimatedRows: rowsByTable.get(tableName) || 0,
+      });
     }
 
-    // 获取索引信息
-    const indexesResult = await this.pool.request()
-      .input('param0', tableName)
-      .query(`
-        SELECT
-          i.name AS index_name,
-          STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) AS column_names,
-          i.is_unique
-        FROM sys.indexes i
-        INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-        WHERE i.object_id = OBJECT_ID(@param0)
-          AND i.is_primary_key = 0
-          AND i.type > 0
-        GROUP BY i.name, i.is_unique
-        ORDER BY i.name
-      `);
-
-    const indexInfos: IndexInfo[] = [];
-    if (indexesResult.recordset) {
-      for (const row of indexesResult.recordset) {
-        const columns = row.column_names.split(', ').map((col: string) => col.toLowerCase());
-        indexInfos.push({
-          name: row.index_name,
-          columns,
-          unique: row.is_unique,
-        });
-      }
-    }
-
-    // 获取行数估算
-    const rowCountResult = await this.pool.request()
-      .input('param0', tableName)
-      .query(`
-        SELECT SUM(p.rows) AS row_count
-        FROM sys.partitions p
-        JOIN sys.tables t ON p.object_id = t.object_id
-        WHERE t.name = @param0
-          AND t.schema_id = SCHEMA_ID()
-          AND p.index_id IN (0, 1)
-      `);
-
-    const estimatedRows = rowCountResult.recordset?.[0]?.row_count || 0;
+    tableInfos.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
-      name: tableName.toLowerCase(),
-      columns: columnInfos,
-      primaryKeys,
-      indexes: indexInfos,
-      estimatedRows,
+      databaseType: 'sqlserver',
+      databaseName,
+      tables: tableInfos,
+      version,
     };
   }
 

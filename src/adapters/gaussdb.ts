@@ -2,6 +2,8 @@
  * GaussDB / OpenGauss 数据库适配器
  * 使用 pg 驱动实现 DbAdapter 接口
  * GaussDB 和 OpenGauss 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
+ *
+ * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
  */
 
 import pg from 'pg';
@@ -105,7 +107,7 @@ export class GaussDBAdapter implements DbAdapter {
   }
 
   /**
-   * 获取数据库结构信息
+   * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.client) {
@@ -121,29 +123,77 @@ export class GaussDBAdapter implements DbAdapter {
       const dbResult = await this.client.query('SELECT current_database()');
       const databaseName = dbResult.rows[0]?.current_database || this.config.database || 'unknown';
 
-      // 获取所有表（仅 public schema）
-      const tablesResult = await this.client.query(`
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_type = 'BASE TABLE'
-        ORDER BY table_name
+      // 批量获取所有表的列信息
+      const allColumnsResult = await this.client.query(`
+        SELECT
+          c.table_name,
+          c.column_name,
+          c.data_type,
+          c.is_nullable,
+          c.column_default,
+          c.character_maximum_length,
+          c.numeric_precision,
+          c.numeric_scale,
+          c.ordinal_position
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+        WHERE c.table_schema = 'public'
+          AND t.table_type = 'BASE TABLE'
+        ORDER BY c.table_name, c.ordinal_position
       `);
 
-      const tableInfos: TableInfo[] = [];
+      // 批量获取所有表的主键信息
+      const allPrimaryKeysResult = await this.client.query(`
+        SELECT
+          t.relname as table_name,
+          a.attname as column_name
+        FROM pg_index i
+        JOIN pg_class t ON t.oid = i.indrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE i.indisprimary
+          AND n.nspname = 'public'
+        ORDER BY t.relname, a.attnum
+      `);
 
-      for (const row of tablesResult.rows) {
-        const tableName = row.table_name;
-        const tableInfo = await this.getTableInfo(tableName);
-        tableInfos.push(tableInfo);
-      }
+      // 批量获取所有表的索引信息
+      const allIndexesResult = await this.client.query(`
+        SELECT
+          t.relname as table_name,
+          i.relname as index_name,
+          a.attname as column_name,
+          ix.indisunique as is_unique
+        FROM pg_class t
+        JOIN pg_index ix ON t.oid = ix.indrelid
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE t.relkind = 'r'
+          AND n.nspname = 'public'
+          AND NOT ix.indisprimary
+        ORDER BY t.relname, i.relname, a.attnum
+      `);
 
-      return {
-        databaseType: 'gaussdb',
+      // 批量获取所有表的行数估算
+      const allStatsResult = await this.client.query(`
+        SELECT
+          c.relname as table_name,
+          c.reltuples::bigint as estimated_rows
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r'
+          AND n.nspname = 'public'
+      `);
+
+      return this.assembleSchema(
         databaseName,
-        tables: tableInfos,
         version,
-      };
+        allColumnsResult.rows,
+        allPrimaryKeysResult.rows,
+        allIndexesResult.rows,
+        allStatsResult.rows
+      );
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
@@ -152,112 +202,108 @@ export class GaussDBAdapter implements DbAdapter {
   }
 
   /**
-   * 获取单个表的详细信息
+   * 组装 Schema 信息
    */
-  private async getTableInfo(tableName: string): Promise<TableInfo> {
-    if (!this.client) {
-      throw new Error('数据库未连接');
-    }
+  private assembleSchema(
+    databaseName: string,
+    version: string,
+    allColumns: any[],
+    allPrimaryKeys: any[],
+    allIndexes: any[],
+    allStats: any[]
+  ): SchemaInfo {
+    const columnsByTable = new Map<string, ColumnInfo[]>();
 
-    // 获取列信息
-    const columnsResult = await this.client.query(`
-      SELECT
-        column_name,
-        data_type,
-        is_nullable,
-        column_default,
-        character_maximum_length,
-        numeric_precision,
-        numeric_scale
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = $1
-      ORDER BY ordinal_position
-    `, [tableName]);
+    for (const col of allColumns) {
+      const tableName = col.table_name;
 
-    const columnInfos: ColumnInfo[] = columnsResult.rows.map((col) => {
+      if (!columnsByTable.has(tableName)) {
+        columnsByTable.set(tableName, []);
+      }
+
       let dataType = col.data_type;
-
-      // 添加长度/精度信息
       if (col.character_maximum_length) {
         dataType += `(${col.character_maximum_length})`;
       } else if (col.numeric_precision) {
         dataType += `(${col.numeric_precision}${col.numeric_scale ? `,${col.numeric_scale}` : ''})`;
       }
 
-      return {
+      columnsByTable.get(tableName)!.push({
         name: col.column_name,
         type: dataType,
         nullable: col.is_nullable === 'YES',
         defaultValue: col.column_default || undefined,
-      };
-    });
+      });
+    }
 
-    // 获取主键
-    const pkResult = await this.client.query(`
-      SELECT a.attname
-      FROM pg_index i
-      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-      WHERE i.indrelid = $1::regclass
-        AND i.indisprimary
-    `, [tableName]);
+    const primaryKeysByTable = new Map<string, string[]>();
+    for (const pk of allPrimaryKeys) {
+      const tableName = pk.table_name;
+      if (!primaryKeysByTable.has(tableName)) {
+        primaryKeysByTable.set(tableName, []);
+      }
+      primaryKeysByTable.get(tableName)!.push(pk.column_name);
+    }
 
-    const primaryKeys = pkResult.rows.map(row => row.attname);
+    const indexesByTable = new Map<string, Map<string, { columns: string[]; unique: boolean }>>();
 
-    // 获取索引信息
-    const indexResult = await this.client.query(`
-      SELECT
-        i.relname as index_name,
-        a.attname as column_name,
-        ix.indisunique as is_unique
-      FROM pg_class t
-      JOIN pg_index ix ON t.oid = ix.indrelid
-      JOIN pg_class i ON i.oid = ix.indexrelid
-      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-      WHERE t.relname = $1
-        AND t.relkind = 'r'
-        AND NOT ix.indisprimary
-      ORDER BY i.relname, a.attnum
-    `, [tableName]);
-
-    const indexMap = new Map<string, { columns: string[]; unique: boolean }>();
-
-    for (const idx of indexResult.rows) {
+    for (const idx of allIndexes) {
+      const tableName = idx.table_name;
       const indexName = idx.index_name;
 
-      if (!indexMap.has(indexName)) {
-        indexMap.set(indexName, {
+      if (!indexesByTable.has(tableName)) {
+        indexesByTable.set(tableName, new Map());
+      }
+
+      const tableIndexes = indexesByTable.get(tableName)!;
+
+      if (!tableIndexes.has(indexName)) {
+        tableIndexes.set(indexName, {
           columns: [],
           unique: idx.is_unique,
         });
       }
 
-      indexMap.get(indexName)!.columns.push(idx.column_name);
+      tableIndexes.get(indexName)!.columns.push(idx.column_name);
     }
 
-    const indexInfos: IndexInfo[] = Array.from(indexMap.entries()).map(
-      ([name, info]) => ({
-        name,
-        columns: info.columns,
-        unique: info.unique,
-      })
-    );
+    const rowsByTable = new Map<string, number>();
+    for (const stat of allStats) {
+      rowsByTable.set(stat.table_name, Number(stat.estimated_rows) || 0);
+    }
 
-    // 获取表行数估算
-    const statsResult = await this.client.query(`
-      SELECT reltuples::bigint as estimate
-      FROM pg_class
-      WHERE relname = $1
-    `, [tableName]);
+    const tableInfos: TableInfo[] = [];
 
-    const estimatedRows = Number(statsResult.rows[0]?.estimate || 0);
+    for (const [tableName, columns] of columnsByTable.entries()) {
+      const tableIndexes = indexesByTable.get(tableName);
+      const indexInfos: IndexInfo[] = [];
+
+      if (tableIndexes) {
+        for (const [indexName, indexData] of tableIndexes.entries()) {
+          indexInfos.push({
+            name: indexName,
+            columns: indexData.columns,
+            unique: indexData.unique,
+          });
+        }
+      }
+
+      tableInfos.push({
+        name: tableName,
+        columns,
+        primaryKeys: primaryKeysByTable.get(tableName) || [],
+        indexes: indexInfos,
+        estimatedRows: rowsByTable.get(tableName) || 0,
+      });
+    }
+
+    tableInfos.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
-      name: tableName,
-      columns: columnInfos,
-      primaryKeys,
-      indexes: indexInfos,
-      estimatedRows,
+      databaseType: 'gaussdb',
+      databaseName,
+      tables: tableInfos,
+      version,
     };
   }
 

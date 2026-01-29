@@ -2,6 +2,8 @@
  * TiDB 数据库适配器
  * 使用 mysql2 驱动实现 DbAdapter 接口
  * TiDB 兼容 MySQL 5.7 协议
+ *
+ * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
  */
 
 import mysql from 'mysql2/promise';
@@ -112,7 +114,7 @@ export class TiDBAdapter implements DbAdapter {
   }
 
   /**
-   * 获取数据库结构信息
+   * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.connection) {
@@ -128,25 +130,47 @@ export class TiDBAdapter implements DbAdapter {
       const [dbRows] = await this.connection.query('SELECT DATABASE() as db');
       const databaseName = (dbRows as any[])[0]?.db || this.config.database || 'unknown';
 
-      // 获取所有表
-      const [tables] = await this.connection.query(
-        'SHOW TABLES'
-      ) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+      // 批量获取所有表的列信息
+      const [allColumns] = await this.connection.query(`
+        SELECT
+          TABLE_NAME,
+          COLUMN_NAME,
+          COLUMN_TYPE,
+          IS_NULLABLE,
+          COLUMN_DEFAULT,
+          COLUMN_KEY,
+          COLUMN_COMMENT,
+          ORDINAL_POSITION
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-      const tableInfos: TableInfo[] = [];
+      // 批量获取所有表的索引信息
+      const [allIndexes] = await this.connection.query(`
+        SELECT
+          TABLE_NAME,
+          INDEX_NAME,
+          COLUMN_NAME,
+          NON_UNIQUE,
+          SEQ_IN_INDEX
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+        ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
+      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-      for (const tableRow of tables) {
-        const tableName = Object.values(tableRow)[0] as string;
-        const tableInfo = await this.getTableInfo(tableName);
-        tableInfos.push(tableInfo);
-      }
+      // 批量获取所有表的行数估算
+      const [allStats] = await this.connection.query(`
+        SELECT
+          TABLE_NAME,
+          TABLE_ROWS
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_TYPE = 'BASE TABLE'
+      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-      return {
-        databaseType: 'tidb',
-        databaseName,
-        tables: tableInfos,
-        version,
-      };
+      // 在内存中组装数据
+      return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats);
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
@@ -155,76 +179,105 @@ export class TiDBAdapter implements DbAdapter {
   }
 
   /**
-   * 获取单个表的详细信息
+   * 组装 Schema 信息
    */
-  private async getTableInfo(tableName: string): Promise<TableInfo> {
-    if (!this.connection) {
-      throw new Error('数据库未连接');
+  private assembleSchema(
+    databaseName: string,
+    version: string,
+    allColumns: mysql.RowDataPacket[],
+    allIndexes: mysql.RowDataPacket[],
+    allStats: mysql.RowDataPacket[]
+  ): SchemaInfo {
+    // 按表名分组列信息
+    const columnsByTable = new Map<string, ColumnInfo[]>();
+    const primaryKeysByTable = new Map<string, string[]>();
+
+    for (const col of allColumns) {
+      const tableName = col.TABLE_NAME;
+
+      if (!columnsByTable.has(tableName)) {
+        columnsByTable.set(tableName, []);
+        primaryKeysByTable.set(tableName, []);
+      }
+
+      columnsByTable.get(tableName)!.push({
+        name: col.COLUMN_NAME,
+        type: col.COLUMN_TYPE,
+        nullable: col.IS_NULLABLE === 'YES',
+        defaultValue: col.COLUMN_DEFAULT,
+        comment: col.COLUMN_COMMENT || undefined,
+      });
+
+      // 收集主键
+      if (col.COLUMN_KEY === 'PRI') {
+        primaryKeysByTable.get(tableName)!.push(col.COLUMN_NAME);
+      }
     }
 
-    // 获取列信息
-    const [columns] = await this.connection.query(
-      'SHOW FULL COLUMNS FROM ??',
-      [tableName]
-    ) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+    // 按表名分组索引信息
+    const indexesByTable = new Map<string, Map<string, { columns: string[]; unique: boolean }>>();
 
-    const columnInfos: ColumnInfo[] = columns.map((col) => ({
-      name: col.Field,
-      type: col.Type,
-      nullable: col.Null === 'YES',
-      defaultValue: col.Default,
-      comment: col.Comment || undefined,
-    }));
+    for (const idx of allIndexes) {
+      const tableName = idx.TABLE_NAME;
+      const indexName = idx.INDEX_NAME;
 
-    // 获取主键
-    const primaryKeys = columns
-      .filter((col) => col.Key === 'PRI')
-      .map((col) => col.Field);
+      if (indexName === 'PRIMARY') continue;
 
-    // 获取索引信息
-    const [indexes] = await this.connection.query(
-      'SHOW INDEX FROM ??',
-      [tableName]
-    ) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+      if (!indexesByTable.has(tableName)) {
+        indexesByTable.set(tableName, new Map());
+      }
 
-    const indexMap = new Map<string, { columns: string[]; unique: boolean }>();
+      const tableIndexes = indexesByTable.get(tableName)!;
 
-    for (const idx of indexes) {
-      const indexName = idx.Key_name;
-      if (indexName === 'PRIMARY') continue; // 跳过主键索引
-
-      if (!indexMap.has(indexName)) {
-        indexMap.set(indexName, {
+      if (!tableIndexes.has(indexName)) {
+        tableIndexes.set(indexName, {
           columns: [],
-          unique: idx.Non_unique === 0,
+          unique: idx.NON_UNIQUE === 0,
         });
       }
 
-      indexMap.get(indexName)!.columns.push(idx.Column_name);
+      tableIndexes.get(indexName)!.columns.push(idx.COLUMN_NAME);
     }
 
-    const indexInfos: IndexInfo[] = Array.from(indexMap.entries()).map(
-      ([name, info]) => ({
-        name,
-        columns: info.columns,
-        unique: info.unique,
-      })
-    );
+    // 按表名分组行数统计
+    const rowsByTable = new Map<string, number>();
+    for (const stat of allStats) {
+      rowsByTable.set(stat.TABLE_NAME, stat.TABLE_ROWS || 0);
+    }
 
-    // 获取表行数估算
-    const [statusRows] = await this.connection.query(
-      'SHOW TABLE STATUS WHERE Name = ?',
-      [tableName]
-    ) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+    // 组装表信息
+    const tableInfos: TableInfo[] = [];
 
-    const estimatedRows = statusRows[0]?.Rows || 0;
+    for (const [tableName, columns] of columnsByTable.entries()) {
+      const tableIndexes = indexesByTable.get(tableName);
+      const indexInfos: IndexInfo[] = [];
+
+      if (tableIndexes) {
+        for (const [indexName, indexData] of tableIndexes.entries()) {
+          indexInfos.push({
+            name: indexName,
+            columns: indexData.columns,
+            unique: indexData.unique,
+          });
+        }
+      }
+
+      tableInfos.push({
+        name: tableName,
+        columns,
+        primaryKeys: primaryKeysByTable.get(tableName) || [],
+        indexes: indexInfos,
+        estimatedRows: rowsByTable.get(tableName) || 0,
+      });
+    }
+
+    tableInfos.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
-      name: tableName,
-      columns: columnInfos,
-      primaryKeys,
-      indexes: indexInfos,
-      estimatedRows,
+      databaseType: 'tidb',
+      databaseName,
+      tables: tableInfos,
+      version,
     };
   }
 
