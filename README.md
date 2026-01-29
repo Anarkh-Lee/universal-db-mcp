@@ -803,8 +803,16 @@ curl "http://localhost:3000/api/cache/status?sessionId=xxx"
 - MySQL、TiDB、OceanBase、PolarDB、GoldenDB（MySQL 兼容）
 - PostgreSQL、KingbaseES、GaussDB、Vastbase、HighGo（PostgreSQL 兼容）
 - SQL Server
+- Oracle（使用 ALL_* 视图批量查询）
+- 达梦 DM（使用 USER_* 视图批量查询）
 
-共 **11 个**适配器已完成批量查询优化。
+共 **13 个**适配器已完成批量查询优化。
+
+未修改的适配器（4 个）：
+  - SQLite: 本地文件数据库，PRAGMA 查询已经很快
+  - ClickHouse: 使用 system 表查询，已经是批量方式
+  - Redis: 键值存储，无传统表结构
+  - MongoDB: 文档数据库，需要采样推断结构
 
 ### 何时需要刷新缓存
 

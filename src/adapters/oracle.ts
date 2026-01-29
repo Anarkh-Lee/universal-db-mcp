@@ -1,6 +1,8 @@
 /**
  * Oracle 数据库适配器
  * 使用 oracledb 驱动实现 DbAdapter 接口
+ *
+ * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
  */
 
 import oracledb from 'oracledb';
@@ -173,7 +175,7 @@ export class OracleAdapter implements DbAdapter {
   }
 
   /**
-   * 获取数据库结构信息
+   * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.connection) {
@@ -195,31 +197,64 @@ export class OracleAdapter implements DbAdapter {
         ? Object.values(userResult.rows[0])[0] as string
         : 'unknown';
 
-      // 获取所有表
-      const tablesResult = await this.connection.execute(
-        `SELECT table_name, num_rows, tablespace_name
-         FROM all_tables
-         WHERE owner = USER
-           AND temporary = 'N'
-         ORDER BY table_name`
+      // 批量获取所有表的列信息
+      const allColumnsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
+                DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
+         FROM ALL_TAB_COLUMNS
+         WHERE OWNER = USER
+         ORDER BY TABLE_NAME, COLUMN_ID`
       );
 
-      const tableInfos: TableInfo[] = [];
+      // 批量获取所有列注释
+      const allCommentsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
+         FROM ALL_COL_COMMENTS
+         WHERE OWNER = USER
+           AND COMMENTS IS NOT NULL`
+      );
 
-      if (tablesResult.rows) {
-        for (const tableRow of tablesResult.rows) {
-          const tableName = (tableRow as any).TABLE_NAME;
-          const tableInfo = await this.getTableInfo(tableName);
-          tableInfos.push(tableInfo);
-        }
-      }
+      // 批量获取所有主键信息
+      const allPrimaryKeysResult = await this.connection.execute(
+        `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
+         FROM ALL_CONSTRAINTS cons
+         JOIN ALL_CONS_COLUMNS cols
+           ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+           AND cons.OWNER = cols.OWNER
+         WHERE cons.CONSTRAINT_TYPE = 'P'
+           AND cons.OWNER = USER
+         ORDER BY cons.TABLE_NAME, cols.POSITION`
+      );
 
-      return {
-        databaseType: 'oracle',
+      // 批量获取所有索引信息
+      const allIndexesResult = await this.connection.execute(
+        `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
+         FROM ALL_INDEXES i
+         JOIN ALL_IND_COLUMNS ic
+           ON i.INDEX_NAME = ic.INDEX_NAME
+           AND i.OWNER = ic.INDEX_OWNER
+         WHERE i.OWNER = USER
+           AND i.INDEX_TYPE != 'LOB'
+         ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`
+      );
+
+      // 批量获取所有表的行数估算
+      const allStatsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, NUM_ROWS
+         FROM ALL_TABLES
+         WHERE OWNER = USER
+           AND TEMPORARY = 'N'`
+      );
+
+      return this.assembleSchema(
         databaseName,
-        tables: tableInfos,
         version,
-      };
+        allColumnsResult.rows || [],
+        allCommentsResult.rows || [],
+        allPrimaryKeysResult.rows || [],
+        allIndexesResult.rows || [],
+        allStatsResult.rows || []
+      );
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
@@ -228,151 +263,148 @@ export class OracleAdapter implements DbAdapter {
   }
 
   /**
-   * 获取单个表的详细信息
+   * 组装 Schema 信息
    */
-  private async getTableInfo(tableName: string): Promise<TableInfo> {
-    if (!this.connection) {
-      throw new Error('数据库未连接');
+  private assembleSchema(
+    databaseName: string,
+    version: string,
+    allColumns: any[],
+    allComments: any[],
+    allPrimaryKeys: any[],
+    allIndexes: any[],
+    allStats: any[]
+  ): SchemaInfo {
+    // 按表名分组列信息
+    const columnsByTable = new Map<string, ColumnInfo[]>();
+
+    for (const col of allColumns) {
+      const tableName = col.TABLE_NAME;
+
+      if (!columnsByTable.has(tableName)) {
+        columnsByTable.set(tableName, []);
+      }
+
+      columnsByTable.get(tableName)!.push({
+        name: col.COLUMN_NAME.toLowerCase(),
+        type: this.formatOracleType(
+          col.DATA_TYPE,
+          col.DATA_LENGTH,
+          col.DATA_PRECISION,
+          col.DATA_SCALE
+        ),
+        nullable: col.NULLABLE === 'Y',
+        defaultValue: col.DATA_DEFAULT?.trim() || undefined,
+      });
     }
 
-    // 获取列信息
-    const columnsResult = await this.connection.execute(
-      `SELECT column_name, data_type, data_length, data_precision,
-              data_scale, nullable, data_default, column_id
-       FROM all_tab_columns
-       WHERE owner = USER
-         AND table_name = :tableName
-       ORDER BY column_id`,
-      [tableName]
-    );
-
-    const columnInfos: ColumnInfo[] = [];
-    if (columnsResult.rows) {
-      for (const col of columnsResult.rows) {
-        const colData = col as any;
-        columnInfos.push({
-          name: colData.COLUMN_NAME.toLowerCase(),
-          type: this.formatOracleType(
-            colData.DATA_TYPE,
-            colData.DATA_LENGTH,
-            colData.DATA_PRECISION,
-            colData.DATA_SCALE
-          ),
-          nullable: colData.NULLABLE === 'Y',
-          defaultValue: colData.DATA_DEFAULT?.trim() || undefined,
-        });
+    // 按表名分组列注释
+    const commentsByTable = new Map<string, Map<string, string>>();
+    for (const comment of allComments) {
+      const tableName = comment.TABLE_NAME;
+      if (!commentsByTable.has(tableName)) {
+        commentsByTable.set(tableName, new Map());
       }
-    }
-
-    // 获取列注释
-    const commentsResult = await this.connection.execute(
-      `SELECT column_name, comments
-       FROM all_col_comments
-       WHERE owner = USER
-         AND table_name = :tableName
-         AND comments IS NOT NULL`,
-      [tableName]
-    );
-
-    const commentsMap = new Map<string, string>();
-    if (commentsResult.rows) {
-      for (const row of commentsResult.rows) {
-        const rowData = row as any;
-        commentsMap.set(
-          rowData.COLUMN_NAME.toLowerCase(),
-          rowData.COMMENTS
-        );
-      }
+      commentsByTable.get(tableName)!.set(
+        comment.COLUMN_NAME.toLowerCase(),
+        comment.COMMENTS
+      );
     }
 
     // 将注释添加到列信息中
-    for (const col of columnInfos) {
-      if (commentsMap.has(col.name)) {
-        col.comment = commentsMap.get(col.name);
-      }
-    }
-
-    // 获取主键
-    const primaryKeysResult = await this.connection.execute(
-      `SELECT cols.column_name, cols.position
-       FROM all_constraints cons
-       JOIN all_cons_columns cols
-         ON cons.constraint_name = cols.constraint_name
-         AND cons.owner = cols.owner
-       WHERE cons.constraint_type = 'P'
-         AND cons.owner = USER
-         AND cons.table_name = :tableName
-       ORDER BY cols.position`,
-      [tableName]
-    );
-
-    const primaryKeys: string[] = [];
-    if (primaryKeysResult.rows) {
-      for (const row of primaryKeysResult.rows) {
-        primaryKeys.push((row as any).COLUMN_NAME.toLowerCase());
-      }
-    }
-
-    // 获取索引信息
-    const indexesResult = await this.connection.execute(
-      `SELECT i.index_name, i.uniqueness, ic.column_name, ic.column_position
-       FROM all_indexes i
-       JOIN all_ind_columns ic
-         ON i.index_name = ic.index_name
-         AND i.owner = ic.index_owner
-       WHERE i.owner = USER
-         AND i.table_name = :tableName
-         AND i.index_type != 'LOB'
-       ORDER BY i.index_name, ic.column_position`,
-      [tableName]
-    );
-
-    const indexMap = new Map<string, { columns: string[]; unique: boolean }>();
-    if (indexesResult.rows) {
-      for (const row of indexesResult.rows) {
-        const rowData = row as any;
-        const indexName = rowData.INDEX_NAME;
-
-        // 跳过主键索引
-        if (indexName.includes('PK_') || indexName.includes('SYS_')) {
-          continue;
+    for (const [tableName, columns] of columnsByTable.entries()) {
+      const tableComments = commentsByTable.get(tableName);
+      if (tableComments) {
+        for (const col of columns) {
+          if (tableComments.has(col.name)) {
+            col.comment = tableComments.get(col.name);
+          }
         }
+      }
+    }
 
-        if (!indexMap.has(indexName)) {
-          indexMap.set(indexName, {
-            columns: [],
-            unique: rowData.UNIQUENESS === 'UNIQUE',
+    // 按表名分组主键信息
+    const primaryKeysByTable = new Map<string, string[]>();
+    for (const pk of allPrimaryKeys) {
+      const tableName = pk.TABLE_NAME;
+      if (!primaryKeysByTable.has(tableName)) {
+        primaryKeysByTable.set(tableName, []);
+      }
+      primaryKeysByTable.get(tableName)!.push(pk.COLUMN_NAME.toLowerCase());
+    }
+
+    // 按表名分组索引信息
+    const indexesByTable = new Map<string, Map<string, { columns: string[]; unique: boolean }>>();
+
+    for (const idx of allIndexes) {
+      const tableName = idx.TABLE_NAME;
+      const indexName = idx.INDEX_NAME;
+
+      // 跳过主键索引
+      if (indexName.includes('PK_') || indexName.includes('SYS_')) {
+        continue;
+      }
+
+      if (!indexesByTable.has(tableName)) {
+        indexesByTable.set(tableName, new Map());
+      }
+
+      const tableIndexes = indexesByTable.get(tableName)!;
+
+      if (!tableIndexes.has(indexName)) {
+        tableIndexes.set(indexName, {
+          columns: [],
+          unique: idx.UNIQUENESS === 'UNIQUE',
+        });
+      }
+
+      tableIndexes.get(indexName)!.columns.push(idx.COLUMN_NAME.toLowerCase());
+    }
+
+    // 按表名分组行数统计
+    const rowsByTable = new Map<string, number>();
+    for (const stat of allStats) {
+      rowsByTable.set(stat.TABLE_NAME, stat.NUM_ROWS || 0);
+    }
+
+    // 组装表信息
+    const tableInfos: TableInfo[] = [];
+
+    for (const [tableName, columns] of columnsByTable.entries()) {
+      // 只包含在 allStats 中的表（排除临时表等）
+      if (!rowsByTable.has(tableName)) {
+        continue;
+      }
+
+      const tableIndexes = indexesByTable.get(tableName);
+      const indexInfos: IndexInfo[] = [];
+
+      if (tableIndexes) {
+        for (const [indexName, indexData] of tableIndexes.entries()) {
+          indexInfos.push({
+            name: indexName,
+            columns: indexData.columns,
+            unique: indexData.unique,
           });
         }
-
-        indexMap.get(indexName)!.columns.push(rowData.COLUMN_NAME.toLowerCase());
       }
+
+      tableInfos.push({
+        name: tableName.toLowerCase(),
+        columns,
+        primaryKeys: primaryKeysByTable.get(tableName) || [],
+        indexes: indexInfos,
+        estimatedRows: rowsByTable.get(tableName) || 0,
+      });
     }
 
-    const indexInfos: IndexInfo[] = Array.from(indexMap.entries()).map(
-      ([name, info]) => ({
-        name,
-        columns: info.columns,
-        unique: info.unique,
-      })
-    );
-
-    // 获取表行数估算
-    const rowCountResult = await this.connection.execute(
-      `SELECT num_rows FROM all_tables WHERE owner = USER AND table_name = :tableName`,
-      [tableName]
-    );
-
-    const estimatedRows = rowCountResult.rows?.[0]
-      ? ((rowCountResult.rows[0] as any).NUM_ROWS || 0)
-      : 0;
+    // 按表名排序
+    tableInfos.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
-      name: tableName.toLowerCase(),
-      columns: columnInfos,
-      primaryKeys,
-      indexes: indexInfos,
-      estimatedRows,
+      databaseType: 'oracle',
+      databaseName,
+      tables: tableInfos,
+      version,
     };
   }
 
