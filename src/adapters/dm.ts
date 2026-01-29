@@ -182,7 +182,8 @@ export class DMAdapter implements DbAdapter {
    * - schema 是用户的命名空间（通常与用户名相同，如 SHOP）
    * - 表存储在 schema 下，不是 database 下
    *
-   * 因此需要使用当前用户名或当前 schema 来查询表信息。
+   * 注意：dmdb 驱动返回的列名是数字索引（"0", "1", ...），不是列名！
+   * 因此需要按索引位置访问数据。
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.connection) {
@@ -196,248 +197,86 @@ export class DMAdapter implements DbAdapter {
         []
       );
       const version = versionResult.rows?.[0]
-        ? this.getFirstValue(versionResult.rows[0]) as string
+        ? this.getValueByIndex(versionResult.rows[0], 0) as string
         : 'unknown';
 
       // 获取当前 schema（在达梦中，schema 通常与用户名相同）
       const schemaResult = await this.connection.execute(
-        `SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') AS CURRENT_SCHEMA FROM DUAL`,
+        `SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL`,
         []
       );
       const currentSchema = schemaResult.rows?.[0]
-        ? this.getFirstValue(schemaResult.rows[0]) as string
+        ? this.getValueByIndex(schemaResult.rows[0], 0) as string
         : '';
 
       // 获取当前用户（作为备选）
       const userResult = await this.connection.execute('SELECT USER FROM DUAL', []);
       const currentUser = userResult.rows?.[0]
-        ? this.getFirstValue(userResult.rows[0]) as string
+        ? this.getValueByIndex(userResult.rows[0], 0) as string
         : '';
 
       // schema 名称：优先使用当前 schema，其次使用当前用户，最后使用配置的用户名
       const schemaName = (currentSchema || currentUser || this.config.user || '').toUpperCase();
       const databaseName = schemaName || 'unknown';
 
-      // 尝试多种方式获取表信息
-      let allColumnsResult: any = { rows: [] };
-      let allCommentsResult: any = { rows: [] };
-      let allPrimaryKeysResult: any = { rows: [] };
-      let allIndexesResult: any = { rows: [] };
-      let allStatsResult: any = { rows: [] };
+      // 获取所有表的列信息
+      // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=DATA_TYPE, 3=DATA_LENGTH,
+      //        4=DATA_PRECISION, 5=DATA_SCALE, 6=NULLABLE, 7=DATA_DEFAULT, 8=COLUMN_ID
+      const allColumnsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
+                DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
+         FROM USER_TAB_COLUMNS
+         ORDER BY TABLE_NAME, COLUMN_ID`,
+        []
+      );
 
-      // 方式1: 尝试使用 USER_* 视图（当前用户的对象，最常用）
-      try {
-        allColumnsResult = await this.connection.execute(
-          `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
-                  DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
-           FROM USER_TAB_COLUMNS
-           ORDER BY TABLE_NAME, COLUMN_ID`,
-          []
-        );
+      // 获取所有列注释
+      // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=COMMENTS
+      const allCommentsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
+         FROM USER_COL_COMMENTS
+         WHERE COMMENTS IS NOT NULL`,
+        []
+      );
 
-        if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
-          allCommentsResult = await this.connection.execute(
-            `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
-             FROM USER_COL_COMMENTS
-             WHERE COMMENTS IS NOT NULL`,
-            []
-          );
+      // 获取所有主键信息
+      // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=POSITION
+      const allPrimaryKeysResult = await this.connection.execute(
+        `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
+         FROM USER_CONSTRAINTS cons
+         JOIN USER_CONS_COLUMNS cols
+           ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+         WHERE cons.CONSTRAINT_TYPE = 'P'
+         ORDER BY cons.TABLE_NAME, cols.POSITION`,
+        []
+      );
 
-          allPrimaryKeysResult = await this.connection.execute(
-            `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
-             FROM USER_CONSTRAINTS cons
-             JOIN USER_CONS_COLUMNS cols
-               ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
-             WHERE cons.CONSTRAINT_TYPE = 'P'
-             ORDER BY cons.TABLE_NAME, cols.POSITION`,
-            []
-          );
+      // 获取所有索引信息
+      // 列顺序: 0=TABLE_NAME, 1=INDEX_NAME, 2=UNIQUENESS, 3=COLUMN_NAME, 4=COLUMN_POSITION
+      const allIndexesResult = await this.connection.execute(
+        `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
+         FROM USER_INDEXES i
+         JOIN USER_IND_COLUMNS ic
+           ON i.INDEX_NAME = ic.INDEX_NAME
+         ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
+        []
+      );
 
-          allIndexesResult = await this.connection.execute(
-            `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
-             FROM USER_INDEXES i
-             JOIN USER_IND_COLUMNS ic
-               ON i.INDEX_NAME = ic.INDEX_NAME
-             ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
-            []
-          );
+      // 获取所有表的行数估算
+      // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS
+      const allStatsResult = await this.connection.execute(
+        `SELECT TABLE_NAME, NUM_ROWS FROM USER_TABLES`,
+        []
+      );
 
-          allStatsResult = await this.connection.execute(
-            `SELECT TABLE_NAME, NUM_ROWS FROM USER_TABLES`,
-            []
-          );
-        }
-      } catch (e) {
-        // USER 视图不可用，尝试其他方式
-      }
-
-      // 方式2: 如果 USER 视图没有数据，尝试 ALL_* 视图
-      if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
-        try {
-          allColumnsResult = await this.connection.execute(
-            `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
-                    DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
-             FROM ALL_TAB_COLUMNS
-             WHERE OWNER = '${schemaName}'
-             ORDER BY TABLE_NAME, COLUMN_ID`,
-            []
-          );
-
-          if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
-            allCommentsResult = await this.connection.execute(
-              `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
-               FROM ALL_COL_COMMENTS
-               WHERE OWNER = '${schemaName}'
-                 AND COMMENTS IS NOT NULL`,
-              []
-            );
-
-            allPrimaryKeysResult = await this.connection.execute(
-              `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
-               FROM ALL_CONSTRAINTS cons
-               JOIN ALL_CONS_COLUMNS cols
-                 ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
-                 AND cons.OWNER = cols.OWNER
-               WHERE cons.CONSTRAINT_TYPE = 'P'
-                 AND cons.OWNER = '${schemaName}'
-               ORDER BY cons.TABLE_NAME, cols.POSITION`,
-              []
-            );
-
-            allIndexesResult = await this.connection.execute(
-              `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
-               FROM ALL_INDEXES i
-               JOIN ALL_IND_COLUMNS ic
-                 ON i.INDEX_NAME = ic.INDEX_NAME
-                 AND i.OWNER = ic.INDEX_OWNER
-               WHERE i.OWNER = '${schemaName}'
-               ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
-              []
-            );
-
-            allStatsResult = await this.connection.execute(
-              `SELECT TABLE_NAME, NUM_ROWS FROM ALL_TABLES WHERE OWNER = '${schemaName}'`,
-              []
-            );
-          }
-        } catch (e) {
-          // ALL 视图不可用，尝试其他方式
-        }
-      }
-
-      // 方式3: 如果以上都没有数据，尝试 DBA_* 视图
-      if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
-        try {
-          allColumnsResult = await this.connection.execute(
-            `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
-                    DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
-             FROM DBA_TAB_COLUMNS
-             WHERE OWNER = '${schemaName}'
-             ORDER BY TABLE_NAME, COLUMN_ID`,
-            []
-          );
-
-          if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
-            allCommentsResult = await this.connection.execute(
-              `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
-               FROM DBA_COL_COMMENTS
-               WHERE OWNER = '${schemaName}'
-                 AND COMMENTS IS NOT NULL`,
-              []
-            );
-
-            allPrimaryKeysResult = await this.connection.execute(
-              `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
-               FROM DBA_CONSTRAINTS cons
-               JOIN DBA_CONS_COLUMNS cols
-                 ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
-                 AND cons.OWNER = cols.OWNER
-               WHERE cons.CONSTRAINT_TYPE = 'P'
-                 AND cons.OWNER = '${schemaName}'
-               ORDER BY cons.TABLE_NAME, cols.POSITION`,
-              []
-            );
-
-            allIndexesResult = await this.connection.execute(
-              `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
-               FROM DBA_INDEXES i
-               JOIN DBA_IND_COLUMNS ic
-                 ON i.INDEX_NAME = ic.INDEX_NAME
-                 AND i.OWNER = ic.INDEX_OWNER
-               WHERE i.OWNER = '${schemaName}'
-               ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
-              []
-            );
-
-            allStatsResult = await this.connection.execute(
-              `SELECT TABLE_NAME, NUM_ROWS FROM DBA_TABLES WHERE OWNER = '${schemaName}'`,
-              []
-            );
-          }
-        } catch (e) {
-          // DBA 视图不可用
-        }
-      }
-
-      // 方式4: 如果以上都没有数据，使用达梦系统表
-      if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
-        try {
-          allColumnsResult = await this.connection.execute(
-            `SELECT
-               o.NAME AS TABLE_NAME,
-               c.NAME AS COLUMN_NAME,
-               c.TYPE$ AS DATA_TYPE,
-               c.LENGTH$ AS DATA_LENGTH,
-               c.SCALE AS DATA_SCALE,
-               CASE WHEN c.NULLABLE$ = 'Y' THEN 'Y' ELSE 'N' END AS NULLABLE,
-               c.DEFVAL AS DATA_DEFAULT,
-               c.COLID AS COLUMN_ID
-             FROM SYSCOLUMNS c
-             JOIN SYSOBJECTS o ON c.ID = o.ID
-             JOIN SYSSCHEMAS s ON o.SCHID = s.ID
-             WHERE s.NAME = '${schemaName}'
-               AND o.SUBTYPE$ = 'UTAB'
-             ORDER BY o.NAME, c.COLID`,
-            []
-          );
-
-          if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
-            allStatsResult = await this.connection.execute(
-              `SELECT o.NAME AS TABLE_NAME, 0 AS NUM_ROWS
-               FROM SYSOBJECTS o
-               JOIN SYSSCHEMAS s ON o.SCHID = s.ID
-               WHERE s.NAME = '${schemaName}'
-                 AND o.SUBTYPE$ = 'UTAB'`,
-              []
-            );
-          }
-        } catch (e) {
-          // 系统表也不可用
-        }
-      }
-
-      // 规范化所有结果的列名为大写（dmdb 驱动可能返回小写列名）
-      const normalizeRows = (rows: any[]): any[] => {
-        if (!rows || !Array.isArray(rows)) {
-          return [];
-        }
-        return rows.map(row => {
-          const normalized: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(row)) {
-            normalized[key.toUpperCase()] = value;
-          }
-          return normalized;
-        });
-      };
-
-      return this.assembleSchema(
+      return this.assembleSchemaFromIndexedRows(
         databaseName,
         version,
-        normalizeRows(allColumnsResult.rows || []),
-        normalizeRows(allCommentsResult.rows || []),
-        normalizeRows(allPrimaryKeysResult.rows || []),
-        normalizeRows(allIndexesResult.rows || []),
-        normalizeRows(allStatsResult.rows || [])
+        allColumnsResult.rows || [],
+        allCommentsResult.rows || [],
+        allPrimaryKeysResult.rows || [],
+        allIndexesResult.rows || [],
+        allStatsResult.rows || []
       );
     } catch (error) {
       throw new Error(
@@ -447,20 +286,29 @@ export class DMAdapter implements DbAdapter {
   }
 
   /**
-   * 安全获取对象的第一个值
+   * 按索引获取对象的值（dmdb 驱动返回的列名是数字索引）
    */
-  private getFirstValue(obj: any): unknown {
+  private getValueByIndex(obj: any, index: number): unknown {
     if (!obj || typeof obj !== 'object') {
       return undefined;
     }
+    // 尝试按数字索引访问
+    if (obj[index] !== undefined) {
+      return obj[index];
+    }
+    // 尝试按字符串索引访问
+    if (obj[String(index)] !== undefined) {
+      return obj[String(index)];
+    }
+    // 尝试按位置获取值
     const values = Object.values(obj);
-    return values.length > 0 ? values[0] : undefined;
+    return values.length > index ? values[index] : undefined;
   }
 
   /**
-   * 组装 Schema 信息
+   * 组装 Schema 信息（处理 dmdb 驱动返回的数字索引列名）
    */
-  private assembleSchema(
+  private assembleSchemaFromIndexedRows(
     databaseName: string,
     version: string,
     allColumns: any[],
@@ -470,11 +318,19 @@ export class DMAdapter implements DbAdapter {
     allStats: any[]
   ): SchemaInfo {
     // 按表名分组列信息
+    // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=DATA_TYPE, 3=DATA_LENGTH,
+    //        4=DATA_PRECISION, 5=DATA_SCALE, 6=NULLABLE, 7=DATA_DEFAULT, 8=COLUMN_ID
     const columnsByTable = new Map<string, ColumnInfo[]>();
 
     for (const col of allColumns) {
-      const tableName = col.TABLE_NAME;
-      const columnName = col.COLUMN_NAME;
+      const tableName = this.getValueByIndex(col, 0) as string;
+      const columnName = this.getValueByIndex(col, 1) as string;
+      const dataType = this.getValueByIndex(col, 2);
+      const dataLength = this.getValueByIndex(col, 3) as number;
+      const dataPrecision = this.getValueByIndex(col, 4) as number;
+      const dataScale = this.getValueByIndex(col, 5) as number;
+      const nullable = this.getValueByIndex(col, 6) as string;
+      const dataDefault = this.getValueByIndex(col, 7);
 
       // 跳过无效数据
       if (!tableName || !columnName) {
@@ -488,21 +344,23 @@ export class DMAdapter implements DbAdapter {
       columnsByTable.get(tableName)!.push({
         name: String(columnName).toLowerCase(),
         type: this.formatDMType(
-          col.DATA_TYPE,
-          col.DATA_LENGTH,
-          col.DATA_SCALE
+          dataType as string | number | null | undefined,
+          dataLength,
+          dataPrecision,
+          dataScale
         ),
-        nullable: col.NULLABLE === 'Y',
-        defaultValue: col.DATA_DEFAULT ? String(col.DATA_DEFAULT).trim() : undefined,
+        nullable: nullable === 'Y',
+        defaultValue: dataDefault ? String(dataDefault).trim() : undefined,
       });
     }
 
     // 按表名分组列注释
+    // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=COMMENTS
     const commentsByTable = new Map<string, Map<string, string>>();
     for (const comment of allComments) {
-      const tableName = comment.TABLE_NAME;
-      const columnName = comment.COLUMN_NAME;
-      const comments = comment.COMMENTS;
+      const tableName = this.getValueByIndex(comment, 0) as string;
+      const columnName = this.getValueByIndex(comment, 1) as string;
+      const comments = this.getValueByIndex(comment, 2) as string;
 
       // 跳过无效数据
       if (!tableName || !columnName || !comments) {
@@ -531,10 +389,11 @@ export class DMAdapter implements DbAdapter {
     }
 
     // 按表名分组主键信息
+    // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=POSITION
     const primaryKeysByTable = new Map<string, string[]>();
     for (const pk of allPrimaryKeys) {
-      const tableName = pk.TABLE_NAME;
-      const columnName = pk.COLUMN_NAME;
+      const tableName = this.getValueByIndex(pk, 0) as string;
+      const columnName = this.getValueByIndex(pk, 1) as string;
 
       // 跳过无效数据
       if (!tableName || !columnName) {
@@ -548,12 +407,14 @@ export class DMAdapter implements DbAdapter {
     }
 
     // 按表名分组索引信息
+    // 列顺序: 0=TABLE_NAME, 1=INDEX_NAME, 2=UNIQUENESS, 3=COLUMN_NAME, 4=COLUMN_POSITION
     const indexesByTable = new Map<string, Map<string, { columns: string[]; unique: boolean }>>();
 
     for (const idx of allIndexes) {
-      const tableName = idx.TABLE_NAME;
-      const indexName = idx.INDEX_NAME;
-      const columnName = idx.COLUMN_NAME;
+      const tableName = this.getValueByIndex(idx, 0) as string;
+      const indexName = this.getValueByIndex(idx, 1) as string;
+      const uniqueness = this.getValueByIndex(idx, 2) as string;
+      const columnName = this.getValueByIndex(idx, 3) as string;
 
       // 跳过无效数据
       if (!tableName || !indexName || !columnName) {
@@ -575,7 +436,7 @@ export class DMAdapter implements DbAdapter {
       if (!tableIndexes.has(indexName)) {
         tableIndexes.set(indexName, {
           columns: [],
-          unique: idx.UNIQUENESS === 'UNIQUE',
+          unique: uniqueness === 'UNIQUE',
         });
       }
 
@@ -583,11 +444,13 @@ export class DMAdapter implements DbAdapter {
     }
 
     // 按表名分组行数统计
+    // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS
     const rowsByTable = new Map<string, number>();
     for (const stat of allStats) {
-      const tableName = stat.TABLE_NAME;
+      const tableName = this.getValueByIndex(stat, 0) as string;
+      const numRows = this.getValueByIndex(stat, 1);
       if (tableName) {
-        rowsByTable.set(tableName, Number(stat.NUM_ROWS) || 0);
+        rowsByTable.set(tableName, Number(numRows) || 0);
       }
     }
 
@@ -634,6 +497,7 @@ export class DMAdapter implements DbAdapter {
   private formatDMType(
     dataType: string | number | undefined | null,
     length?: number,
+    precision?: number,
     scale?: number
   ): string {
     // 处理空值
@@ -679,8 +543,10 @@ export class DMAdapter implements DbAdapter {
       case 'DECIMAL':
       case 'NUMBER':
       case 'NUMERIC':
-        if (length && scale && scale > 0) {
-          return `${typeName}(${length},${scale})`;
+        if (precision && scale && scale > 0) {
+          return `${typeName}(${precision},${scale})`;
+        } else if (precision) {
+          return `${typeName}(${precision})`;
         } else if (length) {
           return `${typeName}(${length})`;
         }
