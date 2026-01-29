@@ -46,6 +46,34 @@ databases:
       username: deploy
       privateKey: ~/.ssh/id_rsa
 
+  # 国产数据库配置示例
+  - name: goldendb-demo
+    type: goldendb
+    host: localhost
+    port: 3306  # 兼容 MySQL 协议
+    user: root
+    password: "${DB_GOLDENDB_PASSWORD}"
+    database: goldendb_test
+    description: 中兴 GoldenDB (MySQL 兼容)
+
+  - name: highgo-demo
+    type: highgo
+    host: localhost
+    port: 5866  # 默认端口通常为 5866
+    user: highgo
+    password: "${DB_HIGHGO_PASSWORD}"
+    database: highgo_test
+    description: 瀚高数据库 (PostgreSQL 兼容)
+
+  - name: vastbase-demo
+    type: vastbase
+    host: localhost
+    port: 5432  # 兼容 PostgreSQL 协议
+    user: vastbase
+    password: "${DB_VASTBASE_PASSWORD}"
+    database: vastbase_test
+    description: 海量数据 Vastbase (PostgreSQL 兼容)
+
 # 全局设置
 settings:
   # 是否允许写操作 (危险！)

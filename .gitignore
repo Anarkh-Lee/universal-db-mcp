@@ -7,3 +7,5 @@ dist/
 coverage/
 .vscode/
 .idea/
+.databases.yaml
+.databases.json

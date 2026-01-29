@@ -20,6 +20,9 @@ import { OceanBaseAdapter } from '../adapters/oceanbase.js';
 import { TiDBAdapter } from '../adapters/tidb.js';
 import { ClickHouseAdapter } from '../adapters/clickhouse.js';
 import { PolarDBAdapter } from '../adapters/polardb.js';
+import { GoldenDBAdapter } from '../adapters/goldendb.js';
+import { HighGoAdapter } from '../adapters/highgo.js';
+import { VastbaseAdapter } from '../adapters/vastbase.js';
 
 /**
  * 健康状态接口
@@ -258,6 +261,33 @@ export class ConnectionPoolService {
 
             case 'polardb':
                 return new PolarDBAdapter({
+                    host: connection.host!,
+                    port: connection.port!,
+                    user: connection.user,
+                    password: connection.password,
+                    database: connection.database,
+                });
+
+            case 'goldendb':
+                return new GoldenDBAdapter({
+                    host: connection.host!,
+                    port: connection.port!,
+                    user: connection.user,
+                    password: connection.password,
+                    database: connection.database,
+                });
+
+            case 'highgo':
+                return new HighGoAdapter({
+                    host: connection.host!,
+                    port: connection.port!,
+                    user: connection.user,
+                    password: connection.password,
+                    database: connection.database,
+                });
+
+            case 'vastbase':
+                return new VastbaseAdapter({
                     host: connection.host!,
                     port: connection.port!,
                     user: connection.user,

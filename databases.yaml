@@ -1,0 +1,57 @@
+# 数据库配置示例 (YAML 格式)
+# 使用 YAML 可以添加注释，比 JSON 更易读
+
+databases:
+  # # MySQL 生产数据库
+  # - name: mysql-production
+  #   type: mysql
+  #   host: localhost
+  #   port: 3306
+  #   user: root
+  #   password: "${DB_MYSQL_PASSWORD}"  # 使用环境变量
+  #   database: production
+  #   description: 生产 MySQL
+  #   isDefault: true  # 默认连接
+
+  # # PostgreSQL 分析数据库
+  # - name: postgres-analytics
+  #   type: postgres
+  #   host: localhost
+  #   port: 5432
+  #   user: postgres
+  #   password: "${DB_PG_PASSWORD}"
+  #   database: analytics
+  #   description: 分析 PostgreSQL
+
+  # Redis 缓存 (无需密码示例)
+  - name: redis-cache
+    type: redis
+    host: localhost
+    port: 6379
+    description: 缓存 Redis
+
+  # 通过 SSH 隧道连接的数据库
+  - name: mysql-via-ssh
+    type: mysql
+    host: 172.16.64.11  # 隧道本地地址
+    port: 3306
+    user: root
+    password: "${DB_MYSQL_PASSWORD}"
+    database: test
+    description: 通过 SSH 隧道连接
+    ssh:
+      enabled: true
+      host: 134.175.142.235
+      port: 22022
+      username: root
+      privateKey: ~/.ssh/id_rsa
+
+# 全局设置
+settings:
+  # 是否允许写操作 (危险！)
+  allowWrite: false
+  
+  # DDL 白名单 (正则表达式)
+  # ddlWhitelist:
+  #   - "^CREATE INDEX"
+  #   - "^ALTER TABLE .* ADD INDEX"

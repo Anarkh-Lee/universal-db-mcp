@@ -118,7 +118,7 @@ export interface BatchResult {
  */
 export interface SchemaInfo {
   /** 数据库类型 */
-  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite' | 'kingbase' | 'gaussdb' | 'oceanbase' | 'tidb' | 'clickhouse' | 'polardb';
+  databaseType: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite' | 'kingbase' | 'gaussdb' | 'oceanbase' | 'tidb' | 'clickhouse' | 'polardb' | 'goldendb' | 'highgo' | 'vastbase';
   /** 数据库名称 */
   databaseName: string;
   /** 表信息列表 */
@@ -177,7 +177,7 @@ import type { SSHConfig } from './ssh.js';
  * 数据库连接配置
  */
 export interface DbConfig {
-  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite' | 'kingbase' | 'gaussdb' | 'oceanbase' | 'tidb' | 'clickhouse' | 'polardb';
+  type: 'mysql' | 'postgres' | 'redis' | 'oracle' | 'dm' | 'sqlserver' | 'mongodb' | 'sqlite' | 'kingbase' | 'gaussdb' | 'oceanbase' | 'tidb' | 'clickhouse' | 'polardb' | 'goldendb' | 'highgo' | 'vastbase';
   host?: string;
   port?: number;
   user?: string;
