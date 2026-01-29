@@ -122,505 +122,48 @@ docker run -p 3000:3000 \
   universal-db-mcp
 ```
 
-## 🚀 快速开始（MCP 模式）
 
-### 前置要求
+## 🚀 快速开始
 
-- Node.js >= 20
-- Claude Desktop 应用
-- 至少一个数据库实例（MySQL/PostgreSQL/Redis/Oracle/达梦/SQL Server/MongoDB/SQLite/KingbaseES/GaussDB/OceanBase/TiDB/ClickHouse/PolarDB/Vastbase/HighGo/GoldenDB）
+本项目支持两种使用模式，**强烈推荐使用多数据库配置模式**，以获得最佳体验（支持动态切换、SSH 隧道、持久化配置）。
 
-### 安装
+### 方式一：多数据库配置模式（🔥 推荐）
 
-```bash
-npm install -g universal-db-mcp
-```
+通过一个配置文件管理所有数据库连接，支持在对话中动态切换。
 
-或使用 npx 直接运行（无需安装）：
-
-```bash
-npx universal-db-mcp
-```
-
-### 配置 Claude Desktop
-
-编辑 Claude Desktop 配置文件：
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-添加以下配置：
-
-#### 1. MySQL 示例
-
-```json
-{
-  "mcpServers": {
-    "mysql-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "mysql",
-        "--host", "localhost",
-        "--port", "3306",
-        "--user", "root",
-        "--password", "your_password",
-        "--database", "your_database"
-      ]
-    }
-  }
-}
-```
-
-#### 2. PostgreSQL 示例
-
-```json
-{
-  "mcpServers": {
-    "postgres-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "postgres",
-        "--host", "localhost",
-        "--port", "5432",
-        "--user", "postgres",
-        "--password", "your_password",
-        "--database", "your_database"
-      ]
-    }
-  }
-}
-```
-
-#### 3. Redis 示例
-
-```json
-{
-  "mcpServers": {
-    "redis-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "redis",
-        "--host", "localhost",
-        "--port", "6379",
-        "--password", "your_password"
-      ]
-    }
-  }
-}
-```
-
-**注意**：Redis 不需要 `--database` 参数，可以通过 `--database` 指定数据库编号（0-15）。
-
-#### 4. Oracle 示例
-
-```json
-{
-  "mcpServers": {
-    "oracle-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "oracle",
-        "--host", "localhost",
-        "--port", "1521",
-        "--user", "system",
-        "--password", "your_password",
-        "--database", "ORCL"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- Oracle 12c 及以上版本
-- 默认端口为 1521
-- `--database` 参数为服务名（Service Name）
-
-#### 5. 达梦（DM）示例
-
-```json
-{
-  "mcpServers": {
-    "dm-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "dm",
-        "--host", "localhost",
-        "--port", "5236",
-        "--user", "SYSDBA",
-        "--password", "your_password",
-        "--database", "DAMENG"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- 达梦数据库 DM7/DM8
-- 默认端口为 5236
-- 驱动会自动安装
-
-#### 6. SQL Server 示例
-
-```json
-{
-  "mcpServers": {
-    "sqlserver-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "sqlserver",
-        "--host", "localhost",
-        "--port", "1433",
-        "--user", "sa",
-        "--password", "your_password",
-        "--database", "master"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- 支持 SQL Server 2012 及以上版本
-- 支持 Azure SQL Database
-- 默认端口为 1433
-
-#### 7. MongoDB 示例
-
-```json
-{
-  "mcpServers": {
-    "mongodb-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "mongodb",
-        "--host", "localhost",
-        "--port", "27017",
-        "--user", "admin",
-        "--password", "your_password",
-        "--database", "test"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- 支持 MongoDB 4.0 及以上版本
-- 默认端口为 27017
-
-#### 8. SQLite 示例
-
-```json
-{
-  "mcpServers": {
-    "universal-db-sqlite": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "sqlite",
-        "--file", "/path/to/your/database.db"
-      ]
-    }
-  }
-}
-```
-
-**注意**：
-- SQLite 不需要 `--host`、`--port`、`--user`、`--password` 参数
-- 使用 `--file` 参数指定数据库文件的绝对路径
-- Windows 路径示例：`"C:\\Users\\YourName\\data\\mydb.db"`
-- macOS/Linux 路径示例：`"/Users/YourName/data/mydb.db"`
-
-#### 9. KingbaseES 示例
-
-```json
-{
-  "mcpServers": {
-    "kingbase-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "kingbase",
-        "--host", "localhost",
-        "--port", "54321",
-        "--user", "system",
-        "--password", "your_password",
-        "--database", "test"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- KingbaseES 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
-- 默认端口为 54321
-- 使用与 PostgreSQL 相同的驱动（pg）
-
-#### 10. GaussDB / OpenGauss 示例
-
-```json
-{
-  "mcpServers": {
-    "gaussdb-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "gaussdb",
-        "--host", "localhost",
-        "--port", "5432",
-        "--user", "gaussdb",
-        "--password", "your_password",
-        "--database", "postgres"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- GaussDB 和 OpenGauss 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
-- 默认端口为 5432
-- 可以使用 `--type gaussdb` 或 `--type opengauss`
-- 使用与 PostgreSQL 相同的驱动（pg）
-
-#### 11. OceanBase 示例
-
-```json
-{
-  "mcpServers": {
-    "oceanbase-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "oceanbase",
-        "--host", "localhost",
-        "--port", "2881",
-        "--user", "root@test",
-        "--password", "your_password",
-        "--database", "test"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- OceanBase 兼容 MySQL 协议
-- 默认端口为 2881（直连端口）或 2883（代理端口）
-- 用户名格式：`用户名@租户名`（如 `root@test`）
-- 使用与 MySQL 相同的驱动（mysql2）
-
-#### 12. TiDB 示例
-
-```json
-{
-  "mcpServers": {
-    "tidb-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "tidb",
-        "--host", "localhost",
-        "--port", "4000",
-        "--user", "root",
-        "--password", "your_password",
-        "--database", "test"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- TiDB 兼容 MySQL 5.7 协议
-- 默认端口为 4000
-- 支持分布式事务和水平扩展
-- 使用与 MySQL 相同的驱动（mysql2）
-
-#### 13. ClickHouse 示例
-
-```json
-{
-  "mcpServers": {
-    "clickhouse-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "clickhouse",
-        "--host", "localhost",
-        "--port", "8123",
-        "--user", "default",
-        "--password", "",
-        "--database", "default"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- ClickHouse 是高性能列式 OLAP 数据库
-- 默认 HTTP 端口为 8123（原生 TCP 端口为 9000）
-- 默认用户为 default，默认数据库为 default
-- 适合大数据分析和实时查询场景
-
-#### 14. PolarDB 示例
-
-```json
-{
-  "mcpServers": {
-    "polardb-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "polardb",
-        "--host", "pc-xxxxx.mysql.polardb.rds.aliyuncs.com",
-        "--port", "3306",
-        "--user", "your_username",
-        "--password", "your_password",
-        "--database", "your_database"
-      ]
-    }
-  }
-}
-```
-
-**说明**：
-- PolarDB 是阿里云的云原生数据库
-- 完全兼容 MySQL 5.6/5.7/8.0 协议
-- 支持一写多读架构，读写分离
-- 使用与 MySQL 相同的驱动（mysql2）
-
-<<<<<<< HEAD
-### 🆕 多数据库配置（推荐）
-
-对于需要管理多个数据库的场景，推荐使用 JSON 配置文件：
-
-**1. 创建配置文件** `databases.json`：
-
-```json
-{
-  "databases": [
-    {
-      "name": "mysql-production",
-      "type": "mysql",
-      "host": "localhost",
-      "port": 3306,
-      "user": "root",
-      "password": "${DB_MYSQL_PASSWORD}",
-      "database": "production",
-      "description": "生产 MySQL",
-      "isDefault": true
-    },
-    {
-      "name": "postgres-analytics",
-      "type": "postgres",
-      "host": "localhost",
-      "port": 5432,
-      "user": "postgres",
-      "password": "${DB_PG_PASSWORD}",
-      "database": "analytics",
-      "description": "分析 PostgreSQL"
-    },
-    {
-      "name": "redis-cache",
-      "type": "redis",
-      "host": "localhost",
-      "port": 6379,
-      "description": "缓存 Redis"
-    }
-  ],
-  "settings": {
-    "allowWrite": false,
-    "ddlWhitelist": []
-  }
-}
-```
-
-**2. 配置 Claude Desktop**：
-=======
-#### 15. Vastbase 示例
->>>>>>> feat/optimize-mysql-schema
-
-```json
-{
-  "mcpServers": {
-<<<<<<< HEAD
-    "universal-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--config", "/path/to/databases.json"
-      ],
-      "env": {
-        "DB_MYSQL_PASSWORD": "your_mysql_password",
-        "DB_PG_PASSWORD": "your_postgres_password"
-      }
-=======
-    "vastbase-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "vastbase",
-        "--host", "localhost",
-        "--port", "5432",
-        "--user", "vastbase",
-        "--password", "your_password",
-        "--database", "postgres"
-      ]
->>>>>>> feat/optimize-mysql-schema
-    }
-  }
-}
-```
-
-<<<<<<< HEAD
-**3. 使用环境变量**：
-
-配置文件支持 `${ENV_VAR}` 格式的环境变量引用，敏感信息（如密码）可以通过环境变量传入，避免明文存储。
-
-**4. 动态切换数据库**：
-
-在对话中可以使用以下命令：
-- "列出所有数据库" → 调用 `list_databases`
-- "切换到 postgres-analytics" → 调用 `switch_database`
-- "检查所有数据库健康状态" → 调用 `health_check`
-
-### 🆕 YAML 配置支持（推荐）
-
-除了 JSON，还支持使用 YAML 格式的配置文件（`.yaml` 或 `.yml`），YAML 更易读且支持注释：
+#### 1. 创建配置文件
+支持 JSON 或 YAML 格式。推荐使用 YAML (`databases.yaml`)，支持注释且更易读。
 
 ```yaml
-# databases.yaml - 带注释的配置示例
+# databases.yaml
 databases:
-  # MySQL 生产数据库
-  - name: mysql-production
+  # MySQL 生产库
+  - name: production-db
     type: mysql
     host: localhost
     port: 3306
     user: root
-    password: "${DB_MYSQL_PASSWORD}"  # 使用环境变量
+    password: "${DB_PASSWORD}" # 支持环境变量
     database: production
-    description: 生产 MySQL
+    description: "核心业务库"
     isDefault: true
 
-  # 通过 SSH 隧道连接
-  - name: mysql-via-ssh
+  # PostgreSQL 分析库
+  - name: analytics-db
+    type: postgres
+    host: localhost
+    port: 5432
+    user: postgres
+    password: "${PG_PASSWORD}"
+    database: analytics
+
+  # 内网数据库 (通过 SSH 隧道直连)
+  - name: internal-db
     type: mysql
-    host: 127.0.0.1
+    host: 10.0.1.5
     port: 3306
-    user: app_user
-    password: "${DB_APP_PASSWORD}"
+    user: admin
+    password: "${INTERNAL_PASS}"
     ssh:
       enabled: true
       host: bastion.example.com
@@ -628,79 +171,153 @@ databases:
       privateKey: ~/.ssh/id_rsa
 
 settings:
-  allowWrite: false  # 安全模式
+  allowWrite: false # 全局只读模式（安全）
 ```
 
-**使用方式**：
+#### 2. 启动服务
 ```bash
-npx universal-db-mcp --config ./databases.yaml
+# 自动加载当前目录下的 databases.yaml 或 databases.json
+npx universal-db-mcp
+
+# 或指定配置文件路径
+npx universal-db-mcp --config ./my-configs/db.yaml
 ```
 
-**自动检测**：如果不指定 `--config`，程序会按以下顺序自动检测：
-1. `databases.json`
-2. `databases.yaml`
-3. `databases.yml`
-=======
-**说明**：
-- Vastbase 是海量数据公司的国产数据库
-- 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
-- 默认端口为 5432
-- 使用与 PostgreSQL 相同的驱动（pg）
-
-#### 16. HighGo 示例
-
+#### 3. Claude Desktop 配置
 ```json
 {
   "mcpServers": {
-    "highgo-db": {
+    "universal-db": {
       "command": "npx",
       "args": [
         "universal-db-mcp",
-        "--type", "highgo",
-        "--host", "localhost",
-        "--port", "5866",
-        "--user", "highgo",
-        "--password", "your_password",
-        "--database", "highgo"
-      ]
+        "--config", "/absolute/path/to/databases.yaml"
+      ],
+      "env": {
+        "DB_PASSWORD": "your_secure_password",
+        "PG_PASSWORD": "another_password"
+      }
     }
   }
 }
 ```
 
-**说明**：
-- HighGo 是瀚高公司的国产数据库
-- 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
-- 默认端口为 5866
-- 使用与 PostgreSQL 相同的驱动（pg）
+---
 
-#### 17. GoldenDB 示例
+### 方式二：单数据库模式（仅供快速测试）
 
-```json
-{
-  "mcpServers": {
-    "goldendb-db": {
-      "command": "npx",
-      "args": [
-        "universal-db-mcp",
-        "--type", "goldendb",
-        "--host", "localhost",
-        "--port", "3306",
-        "--user", "root",
-        "--password", "your_password",
-        "--database", "test"
-      ]
-    }
-  }
-}
+仅适用于临时连接单个数据库进行测试。
+
+```bash
+# MySQL
+npx universal-db-mcp --type mysql --host localhost --port 3306 --user root --password xxx --database test
+
+# PostgreSQL
+npx universal-db-mcp --type postgres --host localhost --port 5432 --user postgres --password xxx --database test
+
+# SQLite
+npx universal-db-mcp --type sqlite --file ./data.db
 ```
 
-**说明**：
-- GoldenDB 是中兴通讯的国产分布式数据库
-- 完全兼容 MySQL 5.7/8.0 协议
-- 默认端口为 3306
-- 使用与 MySQL 相同的驱动（mysql2）
-- 支持分布式事务和水平扩展
+## 📦 数据库配置参考
+
+以下是所有支持的数据库在 `databases.yaml` 中的配置示例。
+
+### 1. 关系型数据库
+
+#### MySQL / MariaDB / TiDB / GoldenDB / OceanBase / PolarDB
+这些数据库均兼容 MySQL 协议，使用 `type: mysql` (或对应特有 type 如 `tidb`, `goldendb`)。
+
+```yaml
+- name: my-mysql
+  type: mysql # 或 tidb, oceanbase, polardb, goldendb
+  host: localhost
+  port: 3306 # TiDB: 4000, OceanBase: 2881
+  user: root
+  password: "password"
+  database: test
+```
+
+#### PostgreSQL / KingbaseES / GaussDB / HighGo / Vastbase
+这些数据库均兼容 PG 协议，使用 `type: postgres` (或对应特有 type 如 `kingbase`, `gaussdb`)。
+
+```yaml
+- name: my-postgres
+  type: postgres # 或 kingbase, gaussdb, highgo, vastbase
+  host: localhost
+  port: 5432 # HighGo: 5866, Kingbase: 54321
+  user: postgres
+  password: "password"
+  database: postgres
+```
+
+### 2. NoSQL 数据库
+
+#### Redis
+```yaml
+- name: my-redis
+  type: redis
+  host: localhost
+  port: 6379
+  password: "password"
+  database: 0 # Redis 数据库编号
+```
+
+#### MongoDB
+```yaml
+- name: my-mongo
+  type: mongodb
+  host: localhost
+  port: 27017
+  user: admin
+  password: "password"
+  database: test
+  authSource: admin # 可选
+```
+
+### 3. 其他数据库
+
+#### Oracle
+```yaml
+- name: my-oracle
+  type: oracle
+  host: localhost
+  port: 1521
+  user: system
+  password: "password"
+  database: ORCL # Service Name
+```
+
+#### SQL Server
+```yaml
+- name: my-mssql
+  type: sqlserver
+  host: localhost
+  port: 1433
+  user: sa
+  password: "password"
+  database: master
+```
+
+#### ClickHouse
+```yaml
+- name: my-clickhouse
+  type: clickhouse
+  host: localhost
+  port: 8123 # HTTP 端口
+  user: default
+  password: ""
+  database: default
+```
+
+#### SQLite
+```yaml
+- name: my-sqlite
+  type: sqlite
+  file: /absolute/path/to/data.db
+```
+
+
 
 ### 配置 Cherry Studio
 
@@ -1178,12 +795,8 @@ HTTP Client → REST API → Middleware → Routes → DatabaseService → Adapt
 universal-db-mcp [选项]
 
 选项：
-<<<<<<< HEAD
-  --config <path>          多数据库 JSON 配置文件路径（推荐）
-  --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite|kingbase|gaussdb|opengauss|oceanbase|tidb|clickhouse|polardb)
-=======
+  --config <path>          多数据库配置文件路径 (支持 .json, .yaml, .yml)
   --type <db>              数据库类型 (mysql|postgres|redis|oracle|dm|sqlserver|mssql|mongodb|sqlite|kingbase|gaussdb|opengauss|oceanbase|tidb|clickhouse|polardb|vastbase|highgo|goldendb)
->>>>>>> feat/optimize-mysql-schema
   --host <host>            数据库主机地址 (默认: localhost)
   --port <port>            数据库端口
   --user <user>            用户名
