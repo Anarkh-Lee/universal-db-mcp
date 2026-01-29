@@ -220,16 +220,6 @@ export class OracleAdapter implements DbAdapter {
            AND COMMENTS IS NOT NULL`
       );
 
-<<<<<<< HEAD
-      if (tablesResult.rows) {
-        // 并行获取所有表的详细信息，提升性能
-        const tableNames = tablesResult.rows.map(row => (row as any).TABLE_NAME);
-        const tableInfoResults = await Promise.all(
-          tableNames.map(tableName => this.getTableInfo(tableName))
-        );
-        tableInfos.push(...tableInfoResults);
-      }
-=======
       // 批量获取所有主键信息
       const allPrimaryKeysResult = await this.connection.execute(
         `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
@@ -241,7 +231,6 @@ export class OracleAdapter implements DbAdapter {
            AND cons.OWNER = USER
          ORDER BY cons.TABLE_NAME, cols.POSITION`
       );
->>>>>>> feat/optimize-mysql-schema
 
       // 批量获取所有索引信息
       const allIndexesResult = await this.connection.execute(

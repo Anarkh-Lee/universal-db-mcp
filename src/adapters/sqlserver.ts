@@ -217,16 +217,6 @@ export class SQLServerAdapter implements DbAdapter {
         ORDER BY tc.TABLE_NAME
       `);
 
-<<<<<<< HEAD
-      if (tablesResult.recordset) {
-        // 并行获取所有表的详细信息，提升性能
-        const tableNames = tablesResult.recordset.map(row => row.TABLE_NAME);
-        const tableInfoResults = await Promise.all(
-          tableNames.map(tableName => this.getTableInfo(tableName))
-        );
-        tableInfos.push(...tableInfoResults);
-      }
-=======
       // 批量获取所有表的索引信息
       const allIndexesResult = await this.pool.request().query(`
         SELECT
@@ -243,7 +233,6 @@ export class SQLServerAdapter implements DbAdapter {
           AND t.schema_id = SCHEMA_ID()
         ORDER BY t.name, i.name, ic.key_ordinal
       `);
->>>>>>> feat/optimize-mysql-schema
 
       // 批量获取所有表的行数估算
       const allStatsResult = await this.pool.request().query(`
@@ -445,9 +434,9 @@ export class SQLServerAdapter implements DbAdapter {
 
     // 事务控制语句
     if (trimmedQuery.startsWith('BEGIN TRANSACTION') ||
-      trimmedQuery.startsWith('BEGIN TRAN') ||
-      trimmedQuery.startsWith('COMMIT') ||
-      trimmedQuery.startsWith('ROLLBACK')) {
+        trimmedQuery.startsWith('BEGIN TRAN') ||
+        trimmedQuery.startsWith('COMMIT') ||
+        trimmedQuery.startsWith('ROLLBACK')) {
       return true;
     }
 

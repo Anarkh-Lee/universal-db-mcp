@@ -245,16 +245,6 @@ export class DMAdapter implements DbAdapter {
         []
       );
 
-<<<<<<< HEAD
-      if (tablesResult.rows) {
-        // 并行获取所有表的详细信息
-        const tableNames = tablesResult.rows.map((row: any) => row.TABLE_NAME);
-        const tableInfoResults = await Promise.all(
-          tableNames.map((tableName: string) => this.getTableInfo(tableName))
-        );
-        tableInfos.push(...tableInfoResults);
-      }
-=======
       // 获取所有主键信息
       // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=POSITION
       const allPrimaryKeysResult = await this.connection.execute(
@@ -266,7 +256,6 @@ export class DMAdapter implements DbAdapter {
          ORDER BY cons.TABLE_NAME, cols.POSITION`,
         []
       );
->>>>>>> feat/optimize-mysql-schema
 
       // 获取所有索引信息
       // 列顺序: 0=TABLE_NAME, 1=INDEX_NAME, 2=UNIQUENESS, 3=COLUMN_NAME, 4=COLUMN_POSITION

@@ -146,13 +146,6 @@ export class TiDBAdapter implements DbAdapter {
         ORDER BY TABLE_NAME, ORDINAL_POSITION
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-<<<<<<< HEAD
-      // 并行获取所有表的详细信息
-      const tableNames = tables.map(tableRow => Object.values(tableRow)[0] as string);
-      const tableInfos: TableInfo[] = await Promise.all(
-        tableNames.map(tableName => this.getTableInfo(tableName))
-      );
-=======
       // 批量获取所有表的索引信息
       const [allIndexes] = await this.connection.query(`
         SELECT
@@ -175,7 +168,6 @@ export class TiDBAdapter implements DbAdapter {
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_TYPE = 'BASE TABLE'
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
->>>>>>> feat/optimize-mysql-schema
 
       // 在内存中组装数据
       return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats);

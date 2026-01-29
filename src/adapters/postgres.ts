@@ -159,14 +159,6 @@ export class PostgreSQLAdapter implements DbAdapter {
         ORDER BY t.relname, a.attnum
       `);
 
-<<<<<<< HEAD
-      // 并行获取所有表的详细信息，提升性能
-      const tableNames = tablesResult.rows.map(row => row.table_name);
-      const tableInfoResults = await Promise.all(
-        tableNames.map(tableName => this.getTableInfo(tableName))
-      );
-      tableInfos.push(...tableInfoResults);
-=======
       // 批量获取所有表的索引信息（排除主键）
       const allIndexesResult = await this.client.query(`
         SELECT
@@ -184,7 +176,6 @@ export class PostgreSQLAdapter implements DbAdapter {
           AND NOT ix.indisprimary
         ORDER BY t.relname, i.relname, a.attnum
       `);
->>>>>>> feat/optimize-mysql-schema
 
       // 批量获取所有表的行数估算
       const allStatsResult = await this.client.query(`
@@ -331,99 +322,5 @@ export class PostgreSQLAdapter implements DbAdapter {
    */
   isWriteOperation(query: string): boolean {
     return checkWriteOperation(query);
-  }
-
-  // ========== 事务支持 ==========
-
-  /**
-   * 开始事务
-   */
-  async beginTransaction(): Promise<void> {
-    if (!this.client) {
-      throw new Error('数据库未连接');
-    }
-    await this.client.query('BEGIN');
-    console.error('🔒 PostgreSQL 事务已开始');
-  }
-
-  /**
-   * 提交事务
-   */
-  async commit(): Promise<void> {
-    if (!this.client) {
-      throw new Error('数据库未连接');
-    }
-    await this.client.query('COMMIT');
-    console.error('✅ PostgreSQL 事务已提交');
-  }
-
-  /**
-   * 回滚事务
-   */
-  async rollback(): Promise<void> {
-    if (!this.client) {
-      throw new Error('数据库未连接');
-    }
-    await this.client.query('ROLLBACK');
-    console.error('↩️ PostgreSQL 事务已回滚');
-  }
-
-  // ========== 查询增强 ==========
-
-  /**
-   * 执行查询返回单条记录
-   */
-  async querySingle(query: string, params?: unknown[]): Promise<Record<string, unknown> | null> {
-    const result = await this.executeQuery(query, params);
-    return result.rows.length > 0 ? result.rows[0] : null;
-  }
-
-  /**
-   * 获取标量值（第一行第一列）
-   */
-  async getScalar(query: string, params?: unknown[]): Promise<unknown> {
-    const result = await this.executeQuery(query, params);
-    if (result.rows.length === 0) {
-      return null;
-    }
-    const firstRow = result.rows[0];
-    const keys = Object.keys(firstRow);
-    return keys.length > 0 ? firstRow[keys[0]] : null;
-  }
-
-  /**
-   * 批量执行多条 SQL
-   */
-  async batchExecute(queries: string[]): Promise<{
-    results: QueryResult[];
-    totalAffectedRows: number;
-    errors: Array<{ index: number; error: string; query: string }>;
-    totalExecutionTime: number;
-  }> {
-    const startTime = Date.now();
-    const results: QueryResult[] = [];
-    const errors: Array<{ index: number; error: string; query: string }> = [];
-    let totalAffectedRows = 0;
-
-    for (let i = 0; i < queries.length; i++) {
-      try {
-        const result = await this.executeQuery(queries[i]);
-        results.push(result);
-        totalAffectedRows += result.affectedRows ?? 0;
-      } catch (error) {
-        errors.push({
-          index: i,
-          error: error instanceof Error ? error.message : String(error),
-          query: queries[i],
-        });
-      }
-    }
-
-    return {
-      results,
-      totalAffectedRows,
-      errors,
-      totalExecutionTime: Date.now() - startTime,
-    };
   }
 }

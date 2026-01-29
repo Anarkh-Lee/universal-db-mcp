@@ -159,14 +159,6 @@ export class OceanBaseAdapter implements DbAdapter {
         ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-<<<<<<< HEAD
-      // 并行获取所有表的详细信息
-      const tableNames = tables.map(tableRow => Object.values(tableRow)[0] as string);
-      const tableInfoResults = await Promise.all(
-        tableNames.map(tableName => this.getTableInfo(tableName))
-      );
-      tableInfos.push(...tableInfoResults);
-=======
       // 批量获取所有表的行数估算
       const [allStats] = await this.connection.query(`
         SELECT
@@ -176,7 +168,6 @@ export class OceanBaseAdapter implements DbAdapter {
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_TYPE = 'BASE TABLE'
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
->>>>>>> feat/optimize-mysql-schema
 
       // 在内存中组装数据
       return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats);

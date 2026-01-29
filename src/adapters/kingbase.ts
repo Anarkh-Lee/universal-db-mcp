@@ -157,14 +157,6 @@ export class KingbaseAdapter implements DbAdapter {
         ORDER BY t.relname, a.attnum
       `);
 
-<<<<<<< HEAD
-      // 并行获取所有表的详细信息
-      const tableNames = tablesResult.rows.map(row => row.table_name);
-      const tableInfoResults = await Promise.all(
-        tableNames.map(tableName => this.getTableInfo(tableName))
-      );
-      tableInfos.push(...tableInfoResults);
-=======
       // 批量获取所有表的索引信息
       const allIndexesResult = await this.client.query(`
         SELECT
@@ -182,7 +174,6 @@ export class KingbaseAdapter implements DbAdapter {
           AND NOT ix.indisprimary
         ORDER BY t.relname, i.relname, a.attnum
       `);
->>>>>>> feat/optimize-mysql-schema
 
       // 批量获取所有表的行数估算
       const allStatsResult = await this.client.query(`
