@@ -177,11 +177,12 @@ export class DMAdapter implements DbAdapter {
   /**
    * 获取数据库结构信息（批量查询优化版本）
    *
-   * 达梦数据库兼容多种查询方式，按优先级尝试：
-   * 1. 使用 DBA_* 视图（需要 DBA 权限）
-   * 2. 使用 ALL_* 视图（需要查询权限）
-   * 3. 使用 USER_* 视图（当前用户的对象）
-   * 4. 使用系统表 SYS* （最底层）
+   * 达梦数据库中：
+   * - database 是数据库实例名（如 DAMENG）
+   * - schema 是用户的命名空间（通常与用户名相同，如 SHOP）
+   * - 表存储在 schema 下，不是 database 下
+   *
+   * 因此需要使用当前用户名或当前 schema 来查询表信息。
    */
   async getSchema(): Promise<SchemaInfo> {
     if (!this.connection) {
@@ -198,8 +199,23 @@ export class DMAdapter implements DbAdapter {
         ? this.getFirstValue(versionResult.rows[0]) as string
         : 'unknown';
 
-      // 确定要查询的 schema 名称
-      const schemaName = (this.config.database || '').toUpperCase();
+      // 获取当前 schema（在达梦中，schema 通常与用户名相同）
+      const schemaResult = await this.connection.execute(
+        `SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') AS CURRENT_SCHEMA FROM DUAL`,
+        []
+      );
+      const currentSchema = schemaResult.rows?.[0]
+        ? this.getFirstValue(schemaResult.rows[0]) as string
+        : '';
+
+      // 获取当前用户（作为备选）
+      const userResult = await this.connection.execute('SELECT USER FROM DUAL', []);
+      const currentUser = userResult.rows?.[0]
+        ? this.getFirstValue(userResult.rows[0]) as string
+        : '';
+
+      // schema 名称：优先使用当前 schema，其次使用当前用户，最后使用配置的用户名
+      const schemaName = (currentSchema || currentUser || this.config.user || '').toUpperCase();
       const databaseName = schemaName || 'unknown';
 
       // 尝试多种方式获取表信息
@@ -209,60 +225,53 @@ export class DMAdapter implements DbAdapter {
       let allIndexesResult: any = { rows: [] };
       let allStatsResult: any = { rows: [] };
 
-      // 方式1: 尝试使用 DBA_TAB_COLUMNS（需要 DBA 权限）
+      // 方式1: 尝试使用 USER_* 视图（当前用户的对象，最常用）
       try {
         allColumnsResult = await this.connection.execute(
           `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
                   DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
-           FROM DBA_TAB_COLUMNS
-           WHERE OWNER = '${schemaName}'
+           FROM USER_TAB_COLUMNS
            ORDER BY TABLE_NAME, COLUMN_ID`,
           []
         );
 
         if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
-          // DBA 视图可用，继续使用 DBA 视图获取其他信息
           allCommentsResult = await this.connection.execute(
             `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
-             FROM DBA_COL_COMMENTS
-             WHERE OWNER = '${schemaName}'
-               AND COMMENTS IS NOT NULL`,
+             FROM USER_COL_COMMENTS
+             WHERE COMMENTS IS NOT NULL`,
             []
           );
 
           allPrimaryKeysResult = await this.connection.execute(
             `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
-             FROM DBA_CONSTRAINTS cons
-             JOIN DBA_CONS_COLUMNS cols
+             FROM USER_CONSTRAINTS cons
+             JOIN USER_CONS_COLUMNS cols
                ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
-               AND cons.OWNER = cols.OWNER
              WHERE cons.CONSTRAINT_TYPE = 'P'
-               AND cons.OWNER = '${schemaName}'
              ORDER BY cons.TABLE_NAME, cols.POSITION`,
             []
           );
 
           allIndexesResult = await this.connection.execute(
             `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
-             FROM DBA_INDEXES i
-             JOIN DBA_IND_COLUMNS ic
+             FROM USER_INDEXES i
+             JOIN USER_IND_COLUMNS ic
                ON i.INDEX_NAME = ic.INDEX_NAME
-               AND i.OWNER = ic.INDEX_OWNER
-             WHERE i.OWNER = '${schemaName}'
              ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
             []
           );
 
           allStatsResult = await this.connection.execute(
-            `SELECT TABLE_NAME, NUM_ROWS FROM DBA_TABLES WHERE OWNER = '${schemaName}'`,
+            `SELECT TABLE_NAME, NUM_ROWS FROM USER_TABLES`,
             []
           );
         }
       } catch (e) {
-        // DBA 视图不可用，尝试其他方式
+        // USER 视图不可用，尝试其他方式
       }
 
-      // 方式2: 如果 DBA 视图没有数据，尝试 ALL_* 视图
+      // 方式2: 如果 USER 视图没有数据，尝试 ALL_* 视图
       if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
         try {
           allColumnsResult = await this.connection.execute(
@@ -316,13 +325,14 @@ export class DMAdapter implements DbAdapter {
         }
       }
 
-      // 方式3: 如果 ALL 视图没有数据，尝试 USER_* 视图（当前用户的对象）
+      // 方式3: 如果以上都没有数据，尝试 DBA_* 视图
       if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
         try {
           allColumnsResult = await this.connection.execute(
             `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
                     DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
-             FROM USER_TAB_COLUMNS
+             FROM DBA_TAB_COLUMNS
+             WHERE OWNER = '${schemaName}'
              ORDER BY TABLE_NAME, COLUMN_ID`,
             []
           );
@@ -330,73 +340,79 @@ export class DMAdapter implements DbAdapter {
           if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
             allCommentsResult = await this.connection.execute(
               `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
-               FROM USER_COL_COMMENTS
-               WHERE COMMENTS IS NOT NULL`,
+               FROM DBA_COL_COMMENTS
+               WHERE OWNER = '${schemaName}'
+                 AND COMMENTS IS NOT NULL`,
               []
             );
 
             allPrimaryKeysResult = await this.connection.execute(
               `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
-               FROM USER_CONSTRAINTS cons
-               JOIN USER_CONS_COLUMNS cols
+               FROM DBA_CONSTRAINTS cons
+               JOIN DBA_CONS_COLUMNS cols
                  ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+                 AND cons.OWNER = cols.OWNER
                WHERE cons.CONSTRAINT_TYPE = 'P'
+                 AND cons.OWNER = '${schemaName}'
                ORDER BY cons.TABLE_NAME, cols.POSITION`,
               []
             );
 
             allIndexesResult = await this.connection.execute(
               `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
-               FROM USER_INDEXES i
-               JOIN USER_IND_COLUMNS ic
+               FROM DBA_INDEXES i
+               JOIN DBA_IND_COLUMNS ic
                  ON i.INDEX_NAME = ic.INDEX_NAME
+                 AND i.OWNER = ic.INDEX_OWNER
+               WHERE i.OWNER = '${schemaName}'
                ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`,
               []
             );
 
             allStatsResult = await this.connection.execute(
-              `SELECT TABLE_NAME, NUM_ROWS FROM USER_TABLES`,
+              `SELECT TABLE_NAME, NUM_ROWS FROM DBA_TABLES WHERE OWNER = '${schemaName}'`,
               []
             );
           }
         } catch (e) {
-          // USER 视图不可用，尝试系统表
+          // DBA 视图不可用
         }
       }
 
       // 方式4: 如果以上都没有数据，使用达梦系统表
       if (!allColumnsResult.rows || allColumnsResult.rows.length === 0) {
-        allColumnsResult = await this.connection.execute(
-          `SELECT
-             o.NAME AS TABLE_NAME,
-             c.NAME AS COLUMN_NAME,
-             c.TYPE$ AS DATA_TYPE,
-             c.LENGTH$ AS DATA_LENGTH,
-             c.SCALE AS DATA_SCALE,
-             CASE WHEN c.NULLABLE$ = 'Y' THEN 'Y' ELSE 'N' END AS NULLABLE,
-             c.DEFVAL AS DATA_DEFAULT,
-             c.COLID AS COLUMN_ID
-           FROM SYSCOLUMNS c
-           JOIN SYSOBJECTS o ON c.ID = o.ID
-           JOIN SYSSCHEMAS s ON o.SCHID = s.ID
-           WHERE s.NAME = '${schemaName}'
-             AND o.SUBTYPE$ = 'UTAB'
-           ORDER BY o.NAME, c.COLID`,
-          []
-        );
-
-        // 系统表的其他查询...
         try {
-          allStatsResult = await this.connection.execute(
-            `SELECT o.NAME AS TABLE_NAME, 0 AS NUM_ROWS
-             FROM SYSOBJECTS o
+          allColumnsResult = await this.connection.execute(
+            `SELECT
+               o.NAME AS TABLE_NAME,
+               c.NAME AS COLUMN_NAME,
+               c.TYPE$ AS DATA_TYPE,
+               c.LENGTH$ AS DATA_LENGTH,
+               c.SCALE AS DATA_SCALE,
+               CASE WHEN c.NULLABLE$ = 'Y' THEN 'Y' ELSE 'N' END AS NULLABLE,
+               c.DEFVAL AS DATA_DEFAULT,
+               c.COLID AS COLUMN_ID
+             FROM SYSCOLUMNS c
+             JOIN SYSOBJECTS o ON c.ID = o.ID
              JOIN SYSSCHEMAS s ON o.SCHID = s.ID
              WHERE s.NAME = '${schemaName}'
-               AND o.SUBTYPE$ = 'UTAB'`,
+               AND o.SUBTYPE$ = 'UTAB'
+             ORDER BY o.NAME, c.COLID`,
             []
           );
+
+          if (allColumnsResult.rows && allColumnsResult.rows.length > 0) {
+            allStatsResult = await this.connection.execute(
+              `SELECT o.NAME AS TABLE_NAME, 0 AS NUM_ROWS
+               FROM SYSOBJECTS o
+               JOIN SYSSCHEMAS s ON o.SCHID = s.ID
+               WHERE s.NAME = '${schemaName}'
+                 AND o.SUBTYPE$ = 'UTAB'`,
+              []
+            );
+          }
         } catch (e) {
-          // 忽略错误
+          // 系统表也不可用
         }
       }
 
