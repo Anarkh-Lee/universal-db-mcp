@@ -154,6 +154,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        oracleClientPath: config.oracleClientPath,
       });
 
     case 'dm':

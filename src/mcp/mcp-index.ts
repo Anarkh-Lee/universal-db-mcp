@@ -27,6 +27,7 @@ export async function startMcpServer(): Promise<void> {
     .option('--database <database>', '数据库名称')
     .option('--file <file>', 'SQLite 数据库文件路径')
     .option('--auth-source <authSource>', 'MongoDB 认证数据库（默认为 admin）')
+    .option('--oracle-client-path <path>', 'Oracle Instant Client 路径（启用 Thick 模式以支持 11g）')
     .option('--danger-allow-write', '启用写入模式（危险！默认为只读模式）', false)
     .action(async (options) => {
       try {
@@ -48,6 +49,11 @@ export async function startMcpServer(): Promise<void> {
         // Add MongoDB-specific config
         if (dbType === 'mongodb' && options.authSource) {
           (config as any).authSource = options.authSource;
+        }
+
+        // Add Oracle-specific config
+        if (dbType === 'oracle' && options.oracleClientPath) {
+          config.oracleClientPath = options.oracleClientPath;
         }
 
         console.error('🔧 配置信息:');

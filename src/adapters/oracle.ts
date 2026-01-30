@@ -27,7 +27,9 @@ export class OracleAdapter implements DbAdapter {
     serviceName?: string;
     sid?: string;
     connectString?: string;
+    oracleClientPath?: string;
   };
+  private static thickModeInitialized = false;
 
   constructor(config: {
     host: string;
@@ -38,8 +40,26 @@ export class OracleAdapter implements DbAdapter {
     serviceName?: string;
     sid?: string;
     connectString?: string;
+    oracleClientPath?: string;
   }) {
     this.config = config;
+
+    // 如果提供了 Oracle Client 路径，启用 Thick 模式（支持 11g）
+    if (config.oracleClientPath && !OracleAdapter.thickModeInitialized) {
+      try {
+        oracledb.initOracleClient({ libDir: config.oracleClientPath });
+        OracleAdapter.thickModeInitialized = true;
+        console.error(`🔧 Oracle Thick 模式已启用，Client 路径: ${config.oracleClientPath}`);
+      } catch (error: any) {
+        // 如果已经初始化过，忽略错误
+        if (error.message && error.message.includes('already initialized')) {
+          OracleAdapter.thickModeInitialized = true;
+        } else {
+          throw new Error(`Oracle Client 初始化失败: ${error.message || String(error)}`);
+        }
+      }
+    }
+
     // 配置 oracledb 全局设置
     oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
     oracledb.fetchAsString = [oracledb.CLOB];

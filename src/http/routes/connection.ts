@@ -39,6 +39,7 @@ export async function setupConnectionRoutes(
           filePath: { type: 'string' },
           authSource: { type: 'string' },
           allowWrite: { type: 'boolean', default: false },
+          oracleClientPath: { type: 'string' },
         },
       },
     },

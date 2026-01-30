@@ -123,4 +123,6 @@ export interface DbConfig {
   filePath?: string;
   /** 是否允许写操作（默认 false，只读模式） */
   allowWrite?: boolean;
+  /** Oracle Instant Client 路径（启用 Thick 模式以支持 11g） */
+  oracleClientPath?: string;
 }

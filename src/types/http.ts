@@ -72,6 +72,8 @@ export interface ConnectRequest {
   filePath?: string;
   authSource?: string;
   allowWrite?: boolean;
+  /** Oracle Instant Client 路径（启用 Thick 模式以支持 11g） */
+  oracleClientPath?: string;
 }
 
 /**
