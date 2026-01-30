@@ -1,6 +1,6 @@
 {
   "name": "universal-db-mcp",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "MCP 数据库万能连接器 - 让 Claude Desktop 直接连接你的数据库",
   "main": "dist/index.js",
   "bin": {
