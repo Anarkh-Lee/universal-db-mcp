@@ -1,0 +1,50 @@
+# Witsy 集成指南
+
+本指南展示如何将 Universal Database MCP Server 与 Witsy 集成。
+
+## 概述
+
+[Witsy](https://witsy.app/) 是一个桌面 AI 助手。它支持 MCP，允许您从聊天界面查询数据库。
+
+## 前置要求
+
+- 已安装 Witsy
+- Node.js 20.0.0 或更高版本
+- 数据库实例
+
+## 配置
+
+添加到 Witsy 的 MCP 配置：
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "command": "npx",
+      "args": [
+        "universal-db-mcp",
+        "--type", "mysql",
+        "--host", "localhost",
+        "--port", "3306",
+        "--user", "root",
+        "--password", "your_password",
+        "--database", "your_database"
+      ]
+    }
+  }
+}
+```
+
+## 使用方法
+
+向 Witsy 询问关于数据库的问题：
+
+```
+数据库里有哪些表？
+显示 users 表的结构
+```
+
+## 资源
+
+- [Witsy 网站](https://witsy.app/)
+- [Universal DB MCP GitHub](https://github.com/Anarkh-Lee/universal-db-mcp)
