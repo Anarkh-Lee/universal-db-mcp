@@ -247,6 +247,74 @@ curl http://localhost:3000/api/health
 curl http://localhost:3000/api/info
 ```
 
+### 更新 Universal DB MCP 版本
+
+**更新步骤** 
+
+```
+# 1. 进入项目目录
+cd /opt/universal-db-mcp
+
+# 2. 停止当前服务
+docker compose down
+
+# 3. 重新构建镜像（会拉取最新 npm 包）
+docker compose build --no-cache
+
+# 4. 启动服务
+docker compose up -d
+
+# 5. 验证服务正常
+docker compose ps
+curl http://localhost:3001/api/health
+```
+
+**一条命令完成更新** 
+
+```
+cd /opt/universal-db-mcp && docker compose down && docker compose build --no-cache && docker compose up -d
+```
+
+**查看更新后的版本**
+
+```
+# 进入容器查看版本
+docker exec universal-db-mcp npm list -g universal-db-mcp
+```
+
+**更新后验证**
+
+```
+# 检查容器状态
+docker compose ps
+
+# 检查日志是否正常
+docker compose logs --tail 50
+
+# 测试 API
+curl http://localhost:3001/api/health
+curl https://universal-db-mcp.anarkh.site/api/health
+```
+
+**查看日志**
+
+```
+# 进入项目目录
+cd /opt/universal-db-mcp
+
+# 查看实时日志（持续输出）
+docker compose logs -f
+
+# 查看最近 100 行
+docker compose logs --tail 100
+
+# 查看最近 1 小时的日志
+docker compose logs --since 1h
+
+# 查看最近 30 分钟的日志
+docker compose logs --since 30m
+```
+
 ---
 
 ## 备选方案一：PM2 部署
