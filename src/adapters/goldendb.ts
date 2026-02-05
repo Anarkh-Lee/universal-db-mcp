@@ -14,6 +14,8 @@ import type {
   TableInfo,
   ColumnInfo,
   IndexInfo,
+  ForeignKeyInfo,
+  RelationshipInfo,
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
@@ -169,8 +171,35 @@ export class GoldenDBAdapter implements DbAdapter {
           AND TABLE_TYPE = 'BASE TABLE'
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
+      // 批量获取所有外键信息
+      let allForeignKeys: mysql.RowDataPacket[] = [];
+      try {
+        const [fkRows] = await this.connection.query(`
+          SELECT
+            kcu.TABLE_NAME,
+            kcu.CONSTRAINT_NAME,
+            kcu.COLUMN_NAME,
+            kcu.REFERENCED_TABLE_NAME,
+            kcu.REFERENCED_COLUMN_NAME,
+            kcu.ORDINAL_POSITION,
+            rc.DELETE_RULE,
+            rc.UPDATE_RULE
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+          JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+            ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+            AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+          WHERE kcu.TABLE_SCHEMA = DATABASE()
+            AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+          ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+        `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+        allForeignKeys = fkRows;
+      } catch (error) {
+        // 外键查询失败时忽略，返回空数组
+        console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
+      }
+
       // 在内存中组装数据
-      return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats);
+      return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats, allForeignKeys);
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
@@ -186,7 +215,8 @@ export class GoldenDBAdapter implements DbAdapter {
     version: string,
     allColumns: mysql.RowDataPacket[],
     allIndexes: mysql.RowDataPacket[],
-    allStats: mysql.RowDataPacket[]
+    allStats: mysql.RowDataPacket[],
+    allForeignKeys: mysql.RowDataPacket[]
   ): SchemaInfo {
     const columnsByTable = new Map<string, ColumnInfo[]>();
     const primaryKeysByTable = new Map<string, string[]>();
@@ -241,6 +271,49 @@ export class GoldenDBAdapter implements DbAdapter {
       rowsByTable.set(stat.TABLE_NAME, stat.TABLE_ROWS || 0);
     }
 
+    // 按表名分组外键信息
+    const foreignKeysByTable = new Map<string, Map<string, { columns: string[]; referencedTable: string; referencedColumns: string[]; onDelete?: string; onUpdate?: string }>>();
+    const relationships: RelationshipInfo[] = [];
+
+    for (const fk of allForeignKeys) {
+      const tableName = fk.TABLE_NAME;
+      const constraintName = fk.CONSTRAINT_NAME;
+
+      if (!foreignKeysByTable.has(tableName)) {
+        foreignKeysByTable.set(tableName, new Map());
+      }
+
+      const tableForeignKeys = foreignKeysByTable.get(tableName)!;
+
+      if (!tableForeignKeys.has(constraintName)) {
+        tableForeignKeys.set(constraintName, {
+          columns: [],
+          referencedTable: fk.REFERENCED_TABLE_NAME,
+          referencedColumns: [],
+          onDelete: fk.DELETE_RULE,
+          onUpdate: fk.UPDATE_RULE,
+        });
+      }
+
+      const fkInfo = tableForeignKeys.get(constraintName)!;
+      fkInfo.columns.push(fk.COLUMN_NAME);
+      fkInfo.referencedColumns.push(fk.REFERENCED_COLUMN_NAME);
+    }
+
+    // 生成全局关系视图
+    for (const [tableName, tableForeignKeys] of foreignKeysByTable.entries()) {
+      for (const [constraintName, fkInfo] of tableForeignKeys.entries()) {
+        relationships.push({
+          fromTable: tableName,
+          fromColumns: fkInfo.columns,
+          toTable: fkInfo.referencedTable,
+          toColumns: fkInfo.referencedColumns,
+          type: 'many-to-one',
+          constraintName,
+        });
+      }
+    }
+
     const tableInfos: TableInfo[] = [];
 
     for (const [tableName, columns] of columnsByTable.entries()) {
@@ -257,11 +330,29 @@ export class GoldenDBAdapter implements DbAdapter {
         }
       }
 
+      // 组装外键信息
+      const tableForeignKeys = foreignKeysByTable.get(tableName);
+      const foreignKeyInfos: ForeignKeyInfo[] = [];
+
+      if (tableForeignKeys) {
+        for (const [constraintName, fkData] of tableForeignKeys.entries()) {
+          foreignKeyInfos.push({
+            name: constraintName,
+            columns: fkData.columns,
+            referencedTable: fkData.referencedTable,
+            referencedColumns: fkData.referencedColumns,
+            onDelete: fkData.onDelete,
+            onUpdate: fkData.onUpdate,
+          });
+        }
+      }
+
       tableInfos.push({
         name: tableName,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,
+        foreignKeys: foreignKeyInfos.length > 0 ? foreignKeyInfos : undefined,
         estimatedRows: rowsByTable.get(tableName) || 0,
       });
     }
@@ -273,6 +364,7 @@ export class GoldenDBAdapter implements DbAdapter {
       databaseName,
       tables: tableInfos,
       version,
+      relationships: relationships.length > 0 ? relationships : undefined,
     };
   }
 

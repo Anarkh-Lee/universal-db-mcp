@@ -545,6 +545,44 @@ curl "http://localhost:3000/api/schema?sessionId=V1StGXR8_Z5jdHi6B-myT" \
     "version": "8.0.32",
     "tables": [
       {
+        "name": "orders",
+        "columns": [
+          {
+            "name": "id",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "comment": "Order ID"
+          },
+          {
+            "name": "user_id",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "comment": "User ID"
+          }
+        ],
+        "primaryKey": ["id"],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "columns": ["id"],
+            "unique": true
+          }
+        ],
+        "foreignKeys": [
+          {
+            "name": "fk_orders_user",
+            "columns": ["user_id"],
+            "referencedTable": "users",
+            "referencedColumns": ["id"],
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION"
+          }
+        ],
+        "estimatedRows": 5000
+      },
+      {
         "name": "users",
         "columns": [
           {
@@ -571,6 +609,16 @@ curl "http://localhost:3000/api/schema?sessionId=V1StGXR8_Z5jdHi6B-myT" \
           }
         ],
         "estimatedRows": 1000
+      }
+    ],
+    "relationships": [
+      {
+        "fromTable": "orders",
+        "fromColumns": ["user_id"],
+        "toTable": "users",
+        "toColumns": ["id"],
+        "type": "many-to-one",
+        "constraintName": "fk_orders_user"
       }
     ]
   },
@@ -602,28 +650,28 @@ curl "http://localhost:3000/api/schema/users?sessionId=V1StGXR8_Z5jdHi6B-myT" \
 {
   "success": true,
   "data": {
-    "name": "users",
+    "name": "orders",
     "columns": [
       {
         "name": "id",
         "type": "int",
         "nullable": false,
         "default": null,
+        "comment": "Order ID"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": false,
+        "default": null,
         "comment": "User ID"
       },
       {
-        "name": "name",
-        "type": "varchar(255)",
+        "name": "amount",
+        "type": "decimal(10,2)",
         "nullable": false,
         "default": null,
-        "comment": "User name"
-      },
-      {
-        "name": "email",
-        "type": "varchar(255)",
-        "nullable": false,
-        "default": null,
-        "comment": "Email address"
+        "comment": "Order amount"
       }
     ],
     "primaryKey": ["id"],
@@ -634,12 +682,22 @@ curl "http://localhost:3000/api/schema/users?sessionId=V1StGXR8_Z5jdHi6B-myT" \
         "unique": true
       },
       {
-        "name": "idx_email",
-        "columns": ["email"],
-        "unique": true
+        "name": "idx_user_id",
+        "columns": ["user_id"],
+        "unique": false
       }
     ],
-    "estimatedRows": 1000
+    "foreignKeys": [
+      {
+        "name": "fk_orders_user",
+        "columns": ["user_id"],
+        "referencedTable": "users",
+        "referencedColumns": ["id"],
+        "onDelete": "CASCADE",
+        "onUpdate": "NO ACTION"
+      }
+    ],
+    "estimatedRows": 5000
   },
   "metadata": {
     "timestamp": "2026-01-27T12:00:00.000Z",

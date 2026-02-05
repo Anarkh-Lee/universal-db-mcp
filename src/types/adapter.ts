@@ -63,6 +63,8 @@ export interface SchemaInfo {
   tables: TableInfo[];
   /** 数据库版本 */
   version?: string;
+  /** 表间关系（全局视图，方便 LLM 理解表关联） */
+  relationships?: RelationshipInfo[];
 }
 
 /**
@@ -77,6 +79,8 @@ export interface TableInfo {
   primaryKeys: string[];
   /** 索引信息 */
   indexes?: IndexInfo[];
+  /** 外键信息 */
+  foreignKeys?: ForeignKeyInfo[];
   /** 预估行数 */
   estimatedRows?: number;
 }
@@ -107,6 +111,42 @@ export interface IndexInfo {
   columns: string[];
   /** 是否唯一索引 */
   unique: boolean;
+}
+
+/**
+ * 外键信息
+ */
+export interface ForeignKeyInfo {
+  /** 外键约束名称 */
+  name: string;
+  /** 本表的外键列 */
+  columns: string[];
+  /** 引用的表名 */
+  referencedTable: string;
+  /** 引用的列名 */
+  referencedColumns: string[];
+  /** 删除时的动作 (CASCADE, SET NULL, NO ACTION, RESTRICT) */
+  onDelete?: string;
+  /** 更新时的动作 (CASCADE, SET NULL, NO ACTION, RESTRICT) */
+  onUpdate?: string;
+}
+
+/**
+ * 表间关系信息（全局视图）
+ */
+export interface RelationshipInfo {
+  /** 源表名 */
+  fromTable: string;
+  /** 源表的外键列 */
+  fromColumns: string[];
+  /** 目标表名 */
+  toTable: string;
+  /** 目标表的被引用列 */
+  toColumns: string[];
+  /** 关系类型 */
+  type: 'one-to-one' | 'one-to-many' | 'many-to-one';
+  /** 外键约束名称 */
+  constraintName?: string;
 }
 
 /**

@@ -14,6 +14,8 @@ import type {
   TableInfo,
   ColumnInfo,
   IndexInfo,
+  ForeignKeyInfo,
+  RelationshipInfo,
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
@@ -275,6 +277,33 @@ export class DMAdapter implements DbAdapter {
         []
       );
 
+      // 获取所有外键信息
+      // 列顺序: 0=TABLE_NAME, 1=CONSTRAINT_NAME, 2=COLUMN_NAME, 3=REFERENCED_TABLE, 4=REFERENCED_COLUMN, 5=DELETE_RULE, 6=POSITION
+      let allForeignKeys: any[] = [];
+      try {
+        const allForeignKeysResult = await this.connection.execute(
+          `SELECT
+            c.TABLE_NAME,
+            c.CONSTRAINT_NAME,
+            cc.COLUMN_NAME,
+            rc.TABLE_NAME AS REFERENCED_TABLE,
+            rcc.COLUMN_NAME AS REFERENCED_COLUMN,
+            c.DELETE_RULE,
+            cc.POSITION
+          FROM USER_CONSTRAINTS c
+          JOIN USER_CONS_COLUMNS cc ON c.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+          JOIN USER_CONSTRAINTS rc ON c.R_CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+          JOIN USER_CONS_COLUMNS rcc ON rc.CONSTRAINT_NAME = rcc.CONSTRAINT_NAME AND cc.POSITION = rcc.POSITION
+          WHERE c.CONSTRAINT_TYPE = 'R'
+          ORDER BY c.TABLE_NAME, c.CONSTRAINT_NAME, cc.POSITION`,
+          []
+        );
+        allForeignKeys = allForeignKeysResult.rows || [];
+      } catch (error) {
+        // 外键查询失败时忽略，返回空数组
+        console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
+      }
+
       return this.assembleSchemaFromIndexedRows(
         databaseName,
         version,
@@ -282,7 +311,8 @@ export class DMAdapter implements DbAdapter {
         allCommentsResult.rows || [],
         allPrimaryKeysResult.rows || [],
         allIndexesResult.rows || [],
-        allStatsResult.rows || []
+        allStatsResult.rows || [],
+        allForeignKeys
       );
     } catch (error) {
       throw new Error(
@@ -321,7 +351,8 @@ export class DMAdapter implements DbAdapter {
     allComments: any[],
     allPrimaryKeys: any[],
     allIndexes: any[],
-    allStats: any[]
+    allStats: any[],
+    allForeignKeys: any[]
   ): SchemaInfo {
     // 按表名分组列信息
     // 列顺序: 0=TABLE_NAME, 1=COLUMN_NAME, 2=DATA_TYPE, 3=DATA_LENGTH,
@@ -460,6 +491,55 @@ export class DMAdapter implements DbAdapter {
       }
     }
 
+    // 按表名分组外键信息
+    // 列顺序: 0=TABLE_NAME, 1=CONSTRAINT_NAME, 2=COLUMN_NAME, 3=REFERENCED_TABLE, 4=REFERENCED_COLUMN, 5=DELETE_RULE, 6=POSITION
+    const foreignKeysByTable = new Map<string, Map<string, { columns: string[]; referencedTable: string; referencedColumns: string[]; onDelete?: string }>>();
+    const relationships: RelationshipInfo[] = [];
+
+    for (const fk of allForeignKeys) {
+      const tableName = this.getValueByIndex(fk, 0) as string;
+      const constraintName = this.getValueByIndex(fk, 1) as string;
+      const columnName = this.getValueByIndex(fk, 2) as string;
+      const referencedTable = this.getValueByIndex(fk, 3) as string;
+      const referencedColumn = this.getValueByIndex(fk, 4) as string;
+      const deleteRule = this.getValueByIndex(fk, 5) as string;
+
+      if (!tableName || !constraintName) continue;
+
+      if (!foreignKeysByTable.has(tableName)) {
+        foreignKeysByTable.set(tableName, new Map());
+      }
+
+      const tableForeignKeys = foreignKeysByTable.get(tableName)!;
+
+      if (!tableForeignKeys.has(constraintName)) {
+        tableForeignKeys.set(constraintName, {
+          columns: [],
+          referencedTable: String(referencedTable).toLowerCase(),
+          referencedColumns: [],
+          onDelete: deleteRule,
+        });
+      }
+
+      const fkInfo = tableForeignKeys.get(constraintName)!;
+      fkInfo.columns.push(String(columnName).toLowerCase());
+      fkInfo.referencedColumns.push(String(referencedColumn).toLowerCase());
+    }
+
+    // 生成全局关系视图
+    for (const [tableName, tableForeignKeys] of foreignKeysByTable.entries()) {
+      for (const [constraintName, fkInfo] of tableForeignKeys.entries()) {
+        relationships.push({
+          fromTable: String(tableName).toLowerCase(),
+          fromColumns: fkInfo.columns,
+          toTable: fkInfo.referencedTable,
+          toColumns: fkInfo.referencedColumns,
+          type: 'many-to-one',
+          constraintName,
+        });
+      }
+    }
+
     // 组装表信息
     const tableInfos: TableInfo[] = [];
 
@@ -477,11 +557,28 @@ export class DMAdapter implements DbAdapter {
         }
       }
 
+      // 组装外键信息
+      const tableForeignKeys = foreignKeysByTable.get(tableName);
+      const foreignKeyInfos: ForeignKeyInfo[] = [];
+
+      if (tableForeignKeys) {
+        for (const [constraintName, fkData] of tableForeignKeys.entries()) {
+          foreignKeyInfos.push({
+            name: constraintName,
+            columns: fkData.columns,
+            referencedTable: fkData.referencedTable,
+            referencedColumns: fkData.referencedColumns,
+            onDelete: fkData.onDelete,
+          });
+        }
+      }
+
       tableInfos.push({
         name: String(tableName).toLowerCase(),
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,
+        foreignKeys: foreignKeyInfos.length > 0 ? foreignKeyInfos : undefined,
         estimatedRows: rowsByTable.get(tableName) || 0,
       });
     }
@@ -494,6 +591,7 @@ export class DMAdapter implements DbAdapter {
       databaseName,
       tables: tableInfos,
       version,
+      relationships: relationships.length > 0 ? relationships : undefined,
     };
   }
 

@@ -11,6 +11,8 @@ import type {
   TableInfo,
   ColumnInfo,
   IndexInfo,
+  ForeignKeyInfo,
+  RelationshipInfo,
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
@@ -133,10 +135,23 @@ export class SQLiteAdapter implements DbAdapter {
         .all() as { name: string }[];
 
       const tableInfos: TableInfo[] = [];
+      const relationships: RelationshipInfo[] = [];
 
       for (const table of tables) {
-        const tableInfo = await this.getTableInfo(table.name);
+        const { tableInfo, tableForeignKeys } = await this.getTableInfo(table.name);
         tableInfos.push(tableInfo);
+
+        // 收集全局关系
+        for (const fk of tableForeignKeys) {
+          relationships.push({
+            fromTable: table.name,
+            fromColumns: fk.columns,
+            toTable: fk.referencedTable,
+            toColumns: fk.referencedColumns,
+            type: 'many-to-one',
+            constraintName: fk.name,
+          });
+        }
       }
 
       return {
@@ -144,6 +159,7 @@ export class SQLiteAdapter implements DbAdapter {
         databaseName,
         tables: tableInfos,
         version,
+        relationships: relationships.length > 0 ? relationships : undefined,
       };
     } catch (error) {
       throw new Error(
@@ -155,7 +171,7 @@ export class SQLiteAdapter implements DbAdapter {
   /**
    * 获取单个表的详细信息
    */
-  private async getTableInfo(tableName: string): Promise<TableInfo> {
+  private async getTableInfo(tableName: string): Promise<{ tableInfo: TableInfo; tableForeignKeys: ForeignKeyInfo[] }> {
     if (!this.db) {
       throw new Error('数据库未连接');
     }
@@ -218,6 +234,50 @@ export class SQLiteAdapter implements DbAdapter {
       });
     }
 
+    // 获取外键信息
+    const foreignKeys = this.db
+      .prepare(`PRAGMA foreign_key_list(${tableName})`)
+      .all() as Array<{
+        id: number;
+        seq: number;
+        table: string;
+        from: string;
+        to: string;
+        on_update: string;
+        on_delete: string;
+        match: string;
+      }>;
+
+    // 按外键 ID 分组（一个外键可能包含多列）
+    const fkMap = new Map<number, { columns: string[]; referencedTable: string; referencedColumns: string[]; onDelete?: string; onUpdate?: string }>();
+
+    for (const fk of foreignKeys) {
+      if (!fkMap.has(fk.id)) {
+        fkMap.set(fk.id, {
+          columns: [],
+          referencedTable: fk.table,
+          referencedColumns: [],
+          onDelete: fk.on_delete !== 'NO ACTION' ? fk.on_delete : undefined,
+          onUpdate: fk.on_update !== 'NO ACTION' ? fk.on_update : undefined,
+        });
+      }
+      const fkInfo = fkMap.get(fk.id)!;
+      fkInfo.columns.push(fk.from);
+      fkInfo.referencedColumns.push(fk.to);
+    }
+
+    const foreignKeyInfos: ForeignKeyInfo[] = [];
+    for (const [id, fkData] of fkMap.entries()) {
+      foreignKeyInfos.push({
+        name: `fk_${tableName}_${id}`,
+        columns: fkData.columns,
+        referencedTable: fkData.referencedTable,
+        referencedColumns: fkData.referencedColumns,
+        onDelete: fkData.onDelete,
+        onUpdate: fkData.onUpdate,
+      });
+    }
+
     // 获取表行数
     const countRow = this.db
       .prepare(`SELECT COUNT(*) as count FROM ${tableName}`)
@@ -225,11 +285,15 @@ export class SQLiteAdapter implements DbAdapter {
     const estimatedRows = countRow.count;
 
     return {
-      name: tableName,
-      columns: columnInfos,
-      primaryKeys,
-      indexes: indexInfos,
-      estimatedRows,
+      tableInfo: {
+        name: tableName,
+        columns: columnInfos,
+        primaryKeys,
+        indexes: indexInfos,
+        foreignKeys: foreignKeyInfos.length > 0 ? foreignKeyInfos : undefined,
+        estimatedRows,
+      },
+      tableForeignKeys: foreignKeyInfos,
     };
   }
 

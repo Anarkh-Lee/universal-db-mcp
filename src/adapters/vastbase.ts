@@ -14,6 +14,8 @@ import type {
   TableInfo,
   ColumnInfo,
   IndexInfo,
+  ForeignKeyInfo,
+  RelationshipInfo,
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
@@ -185,13 +187,55 @@ export class VastbaseAdapter implements DbAdapter {
           AND n.nspname = 'public'
       `);
 
+      // 批量获取所有外键信息
+      let allForeignKeys: any[] = [];
+      try {
+        const allForeignKeysResult = await this.client.query(`
+          SELECT
+            c.conname AS constraint_name,
+            t.relname AS table_name,
+            a.attname AS column_name,
+            rt.relname AS referenced_table,
+            ra.attname AS referenced_column,
+            CASE c.confdeltype
+              WHEN 'a' THEN 'NO ACTION'
+              WHEN 'r' THEN 'RESTRICT'
+              WHEN 'c' THEN 'CASCADE'
+              WHEN 'n' THEN 'SET NULL'
+              WHEN 'd' THEN 'SET DEFAULT'
+            END AS delete_rule,
+            CASE c.confupdtype
+              WHEN 'a' THEN 'NO ACTION'
+              WHEN 'r' THEN 'RESTRICT'
+              WHEN 'c' THEN 'CASCADE'
+              WHEN 'n' THEN 'SET NULL'
+              WHEN 'd' THEN 'SET DEFAULT'
+            END AS update_rule,
+            array_position(c.conkey, a.attnum) AS column_position
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_class rt ON rt.oid = c.confrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+          JOIN pg_attribute ra ON ra.attrelid = rt.oid AND ra.attnum = c.confkey[array_position(c.conkey, a.attnum)]
+          WHERE c.contype = 'f'
+            AND n.nspname = 'public'
+          ORDER BY t.relname, c.conname, array_position(c.conkey, a.attnum)
+        `);
+        allForeignKeys = allForeignKeysResult.rows;
+      } catch (error) {
+        // 外键查询失败时忽略，返回空数组
+        console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
+      }
+
       return this.assembleSchema(
         databaseName,
         version,
         allColumnsResult.rows,
         allPrimaryKeysResult.rows,
         allIndexesResult.rows,
-        allStatsResult.rows
+        allStatsResult.rows,
+        allForeignKeys
       );
     } catch (error) {
       throw new Error(
@@ -209,7 +253,8 @@ export class VastbaseAdapter implements DbAdapter {
     allColumns: any[],
     allPrimaryKeys: any[],
     allIndexes: any[],
-    allStats: any[]
+    allStats: any[],
+    allForeignKeys: any[]
   ): SchemaInfo {
     const columnsByTable = new Map<string, ColumnInfo[]>();
 
@@ -271,6 +316,51 @@ export class VastbaseAdapter implements DbAdapter {
       rowsByTable.set(stat.table_name, Number(stat.estimated_rows) || 0);
     }
 
+    // 按表名分组外键信息
+    const foreignKeysByTable = new Map<string, Map<string, { columns: string[]; referencedTable: string; referencedColumns: string[]; onDelete?: string; onUpdate?: string }>>();
+    const relationships: RelationshipInfo[] = [];
+
+    for (const fk of allForeignKeys) {
+      const tableName = fk.table_name;
+      const constraintName = fk.constraint_name;
+
+      if (!tableName || !constraintName) continue;
+
+      if (!foreignKeysByTable.has(tableName)) {
+        foreignKeysByTable.set(tableName, new Map());
+      }
+
+      const tableForeignKeys = foreignKeysByTable.get(tableName)!;
+
+      if (!tableForeignKeys.has(constraintName)) {
+        tableForeignKeys.set(constraintName, {
+          columns: [],
+          referencedTable: fk.referenced_table,
+          referencedColumns: [],
+          onDelete: fk.delete_rule,
+          onUpdate: fk.update_rule,
+        });
+      }
+
+      const fkInfo = tableForeignKeys.get(constraintName)!;
+      fkInfo.columns.push(fk.column_name);
+      fkInfo.referencedColumns.push(fk.referenced_column);
+    }
+
+    // 生成全局关系视图
+    for (const [tableName, tableForeignKeys] of foreignKeysByTable.entries()) {
+      for (const [constraintName, fkInfo] of tableForeignKeys.entries()) {
+        relationships.push({
+          fromTable: tableName,
+          fromColumns: fkInfo.columns,
+          toTable: fkInfo.referencedTable,
+          toColumns: fkInfo.referencedColumns,
+          type: 'many-to-one',
+          constraintName,
+        });
+      }
+    }
+
     const tableInfos: TableInfo[] = [];
 
     for (const [tableName, columns] of columnsByTable.entries()) {
@@ -287,11 +377,29 @@ export class VastbaseAdapter implements DbAdapter {
         }
       }
 
+      // 组装外键信息
+      const tableForeignKeys = foreignKeysByTable.get(tableName);
+      const foreignKeyInfos: ForeignKeyInfo[] = [];
+
+      if (tableForeignKeys) {
+        for (const [constraintName, fkData] of tableForeignKeys.entries()) {
+          foreignKeyInfos.push({
+            name: constraintName,
+            columns: fkData.columns,
+            referencedTable: fkData.referencedTable,
+            referencedColumns: fkData.referencedColumns,
+            onDelete: fkData.onDelete,
+            onUpdate: fkData.onUpdate,
+          });
+        }
+      }
+
       tableInfos.push({
         name: tableName,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,
+        foreignKeys: foreignKeyInfos.length > 0 ? foreignKeyInfos : undefined,
         estimatedRows: rowsByTable.get(tableName) || 0,
       });
     }
@@ -303,6 +411,7 @@ export class VastbaseAdapter implements DbAdapter {
       databaseName,
       tables: tableInfos,
       version,
+      relationships: relationships.length > 0 ? relationships : undefined,
     };
   }
 

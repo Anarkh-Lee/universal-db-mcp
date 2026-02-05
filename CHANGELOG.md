@@ -2,6 +2,19 @@
 
 本文档记录 Universal DB MCP 的版本更新历史。
 
+## [2.7.0] - 2026
+
+### 新增
+- **外键关系支持** - Schema 信息现在包含外键和表关系数据，帮助 LLM 更好地理解数据库结构
+  - `foreignKeys` - 表级别外键约束信息，包含约束名、列、引用表、引用列、ON DELETE/UPDATE 规则
+  - `relationships` - 全局关系视图，展示所有表之间的关联关系
+  - 支持的数据库：MySQL、PostgreSQL、Oracle、SQL Server、SQLite、达梦、KingbaseES、GaussDB、OceanBase、TiDB、PolarDB、Vastbase、HighGo、GoldenDB
+  - NoSQL 数据库（Redis、MongoDB、ClickHouse）不支持传统外键，返回结果中不包含这些字段
+
+### 改进
+- 更新 API 参考文档（中英文），添加外键和关系字段的示例
+- 更新数据库功能支持表，添加"外键关系"功能行
+
 ## [2.6.0] - 2026
 
 ### 新增

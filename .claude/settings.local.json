@@ -36,7 +36,8 @@
       "Bash(copy:*)",
       "WebFetch(domain:en.oceanbase.com)",
       "WebFetch(domain:docs.dify.ai)",
-      "WebFetch(domain:www.pulsemcp.com)"
+      "WebFetch(domain:www.pulsemcp.com)",
+      "WebFetch(domain:www.modb.pro)"
     ]
   }
 }
