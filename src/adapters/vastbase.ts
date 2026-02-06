@@ -176,11 +176,12 @@ export class VastbaseAdapter implements DbAdapter {
         ORDER BY t.relname, i.relname, a.attnum
       `);
 
-      // 批量获取所有表的行数估算
+      // 批量获取所有表的行数估算和表注释
       const allStatsResult = await this.client.query(`
         SELECT
           c.relname as table_name,
-          c.reltuples::bigint as estimated_rows
+          c.reltuples::bigint as estimated_rows,
+          obj_description(c.oid, 'pg_class') as table_comment
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind = 'r'
@@ -312,8 +313,12 @@ export class VastbaseAdapter implements DbAdapter {
     }
 
     const rowsByTable = new Map<string, number>();
+    const commentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       rowsByTable.set(stat.table_name, Number(stat.estimated_rows) || 0);
+      if (stat.table_comment) {
+        commentsByTable.set(stat.table_name, stat.table_comment);
+      }
     }
 
     // 按表名分组外键信息
@@ -396,6 +401,7 @@ export class VastbaseAdapter implements DbAdapter {
 
       tableInfos.push({
         name: tableName,
+        comment: commentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,

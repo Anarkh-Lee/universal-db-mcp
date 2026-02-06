@@ -240,12 +240,16 @@ export class SQLServerAdapter implements DbAdapter {
       const allStatsResult = await this.pool.request().query(`
         SELECT
           t.name AS table_name,
-          SUM(p.rows) AS row_count
+          SUM(p.rows) AS row_count,
+          ep.value AS table_comment
         FROM sys.partitions p
         JOIN sys.tables t ON p.object_id = t.object_id
+        LEFT JOIN sys.extended_properties ep ON ep.major_id = t.object_id
+          AND ep.minor_id = 0
+          AND ep.name = 'MS_Description'
         WHERE t.schema_id = SCHEMA_ID()
           AND p.index_id IN (0, 1)
-        GROUP BY t.name
+        GROUP BY t.name, ep.value
       `);
 
       // 批量获取所有外键信息
@@ -355,8 +359,12 @@ export class SQLServerAdapter implements DbAdapter {
     }
 
     const rowsByTable = new Map<string, number>();
+    const commentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       rowsByTable.set(stat.table_name, stat.row_count || 0);
+      if (stat.table_comment) {
+        commentsByTable.set(stat.table_name, String(stat.table_comment));
+      }
     }
 
     // 按表名分组外键信息
@@ -439,6 +447,7 @@ export class SQLServerAdapter implements DbAdapter {
 
       tableInfos.push({
         name: tableName.toLowerCase(),
+        comment: commentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,

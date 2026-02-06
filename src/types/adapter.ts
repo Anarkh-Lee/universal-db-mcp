@@ -73,6 +73,8 @@ export interface SchemaInfo {
 export interface TableInfo {
   /** 表名 */
   name: string;
+  /** 表注释/描述 */
+  comment?: string;
   /** 列信息 */
   columns: ColumnInfo[];
   /** 主键列名 */
@@ -147,6 +149,10 @@ export interface RelationshipInfo {
   type: 'one-to-one' | 'one-to-many' | 'many-to-one';
   /** 外键约束名称 */
   constraintName?: string;
+  /** 关系来源：foreign_key=显式外键约束, inferred=基于命名规则推断 */
+  source?: 'foreign_key' | 'inferred';
+  /** 推断置信度 (0-1)，仅当 source='inferred' 时有效 */
+  confidence?: number;
 }
 
 /**

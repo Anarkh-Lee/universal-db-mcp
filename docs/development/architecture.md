@@ -125,7 +125,8 @@ src/
 ├── utils/
 │   ├── safety.ts               # 查询安全验证
 │   ├── adapter-factory.ts      # 适配器工厂
-│   └── config-loader.ts        # 配置加载器
+│   ├── config-loader.ts        # 配置加载器
+│   └── schema-enhancer.ts      # Schema 增强器（隐式关系推断）
 ├── core/                       # 核心业务逻辑
 │   ├── database-service.ts     # 数据库服务
 │   └── connection-manager.ts   # 连接管理器
@@ -211,6 +212,44 @@ class AdapterFactory {
   static getSupportedTypes(): string[]
 }
 ```
+
+### SchemaEnhancer
+
+Schema 增强器，提升 LLM 对数据库结构的理解：
+
+```typescript
+class SchemaEnhancer {
+  // 增强关系信息
+  // 1. 为现有外键关系添加 source='foreign_key' 标记
+  // 2. 推断隐式关系并添加 source='inferred' 标记
+  // 3. 细化关系类型（区分 one-to-one 和 many-to-one）
+  enhanceRelationships(
+    tables: TableInfo[],
+    existingRelationships: RelationshipInfo[]
+  ): RelationshipInfo[]
+
+  // 更新配置
+  updateConfig(config: Partial<SchemaEnhancerConfig>): void
+
+  // 获取当前配置
+  getConfig(): SchemaEnhancerConfig
+}
+```
+
+**隐式关系推断规则：**
+
+| 列名模式 | 目标表 | 目标列 | 置信度 |
+|---------|--------|--------|--------|
+| `xxx_id` | `xxxs` / `xxx` | `id` | 0.90-0.95 |
+| `xxxId` (驼峰) | `xxxs` / `xxx` | `id` | 0.85-0.90 |
+| `xxx_code` | `xxxs` / `xxx` | `code` | 0.90-0.95 |
+| `xxx_no` | `xxxs` / `xxx` | `xxx_no` | 0.70-0.75 |
+
+**推断安全规则：**
+- 不覆盖显式外键：已有外键的列不进行推断
+- 验证目标表存在：只有目标表确实存在时才推断
+- 验证目标列存在：确保目标表有对应的主键列
+- 标注来源和置信度：让 LLM 知道这是推断的关系
 
 ## 数据库适配器
 

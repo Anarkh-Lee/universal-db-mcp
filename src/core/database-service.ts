@@ -6,6 +6,7 @@
 
 import type { DbAdapter, DbConfig, QueryResult, SchemaInfo, TableInfo } from '../types/adapter.js';
 import { validateQuery } from '../utils/safety.js';
+import { SchemaEnhancer, SchemaEnhancerConfig } from '../utils/schema-enhancer.js';
 
 /**
  * Schema 缓存配置
@@ -16,6 +17,11 @@ export interface SchemaCacheConfig {
   /** 是否启用缓存，默认 true */
   enabled: boolean;
 }
+
+/**
+ * Schema 增强配置（导出供外部使用）
+ */
+export type { SchemaEnhancerConfig };
 
 /**
  * Schema 缓存统计信息
@@ -56,10 +62,19 @@ export class DatabaseService {
   private cacheHitCount: number = 0;
   private cacheMissCount: number = 0;
 
-  constructor(adapter: DbAdapter, config: DbConfig, cacheConfig?: Partial<SchemaCacheConfig>) {
+  // Schema 增强器
+  private schemaEnhancer: SchemaEnhancer;
+
+  constructor(
+    adapter: DbAdapter,
+    config: DbConfig,
+    cacheConfig?: Partial<SchemaCacheConfig>,
+    enhancerConfig?: Partial<SchemaEnhancerConfig>
+  ) {
     this.adapter = adapter;
     this.config = config;
     this.cacheConfig = { ...DEFAULT_CACHE_CONFIG, ...cacheConfig };
+    this.schemaEnhancer = new SchemaEnhancer(enhancerConfig);
   }
 
   /**
@@ -102,14 +117,48 @@ export class DatabaseService {
     const schema = await this.adapter.getSchema();
     const elapsed = Date.now() - startTime;
 
+    // 增强 Schema 信息（隐式关系推断、关系类型细化）
+    const enhancedSchema = this.enhanceSchema(schema);
+
     // 更新缓存
     if (this.cacheConfig.enabled) {
-      this.schemaCache = schema;
+      this.schemaCache = enhancedSchema;
       this.schemaCacheTime = now;
-      console.error(`✅ Schema 已缓存 (获取耗时: ${elapsed}ms, 表数量: ${schema.tables.length}, 缓存有效期: ${this.cacheConfig.ttl / 1000}秒)`);
+
+      // 统计增强信息
+      const explicitRelCount = schema.relationships?.length || 0;
+      const totalRelCount = enhancedSchema.relationships?.length || 0;
+      const inferredRelCount = totalRelCount - explicitRelCount;
+
+      console.error(`✅ Schema 已缓存 (获取耗时: ${elapsed}ms, 表数量: ${enhancedSchema.tables.length}, 显式关系: ${explicitRelCount}, 推断关系: ${inferredRelCount}, 缓存有效期: ${this.cacheConfig.ttl / 1000}秒)`);
     }
 
-    return schema;
+    return enhancedSchema;
+  }
+
+  /**
+   * 增强 Schema 信息
+   * - 为现有外键关系添加 source 标记
+   * - 推断隐式关系
+   * - 细化关系类型
+   */
+  private enhanceSchema(schema: SchemaInfo): SchemaInfo {
+    // 对于 NoSQL 数据库（Redis、MongoDB），不进行关系增强
+    if (schema.databaseType === 'redis' || schema.databaseType === 'mongodb') {
+      return schema;
+    }
+
+    // 增强关系信息
+    const existingRelationships = schema.relationships || [];
+    const enhancedRelationships = this.schemaEnhancer.enhanceRelationships(
+      schema.tables,
+      existingRelationships
+    );
+
+    return {
+      ...schema,
+      relationships: enhancedRelationships.length > 0 ? enhancedRelationships : undefined,
+    };
   }
 
   /**
@@ -195,6 +244,23 @@ export class DatabaseService {
   updateCacheConfig(config: Partial<SchemaCacheConfig>): void {
     this.cacheConfig = { ...this.cacheConfig, ...config };
     console.error(`⚙️ 缓存配置已更新: TTL=${this.cacheConfig.ttl}ms, 启用=${this.cacheConfig.enabled}`);
+  }
+
+  /**
+   * 更新 Schema 增强配置
+   */
+  updateEnhancerConfig(config: Partial<SchemaEnhancerConfig>): void {
+    this.schemaEnhancer.updateConfig(config);
+    // 清除缓存以便下次获取时应用新配置
+    this.clearSchemaCache();
+    console.error(`⚙️ Schema 增强配置已更新`);
+  }
+
+  /**
+   * 获取 Schema 增强配置
+   */
+  getEnhancerConfig(): SchemaEnhancerConfig {
+    return this.schemaEnhancer.getConfig();
   }
 
   /**

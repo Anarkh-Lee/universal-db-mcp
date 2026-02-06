@@ -274,10 +274,10 @@ export class ClickHouseAdapter implements DbAdapter {
       unique: false, // ClickHouse 索引不保证唯一性
     }));
 
-    // 获取表行数估算
+    // 获取表行数估算和表注释
     const countResult = await this.client.query({
       query: `
-        SELECT total_rows
+        SELECT total_rows, comment
         FROM system.tables
         WHERE database = {database:String}
           AND name = {table:String}
@@ -289,13 +289,17 @@ export class ClickHouseAdapter implements DbAdapter {
       format: 'JSONEachRow',
     });
 
-    const countData = await countResult.json() as Array<{ total_rows: string }>;
+    const countData = await countResult.json() as Array<{ total_rows: string; comment: string }>;
     const estimatedRows = (Array.isArray(countData) && countData.length > 0)
       ? parseInt(countData[0]?.total_rows || '0', 10)
       : 0;
+    const tableComment = (Array.isArray(countData) && countData.length > 0)
+      ? countData[0]?.comment || undefined
+      : undefined;
 
     return {
       name: tableName,
+      comment: tableComment,
       columns: columnInfos,
       primaryKeys,
       indexes: indexInfos,

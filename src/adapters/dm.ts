@@ -270,10 +270,12 @@ export class DMAdapter implements DbAdapter {
         []
       );
 
-      // 获取所有表的行数估算
-      // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS
+      // 获取所有表的行数估算和表注释
+      // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS, 2=TABLE_COMMENT
       const allStatsResult = await this.connection.execute(
-        `SELECT TABLE_NAME, NUM_ROWS FROM USER_TABLES`,
+        `SELECT t.TABLE_NAME, t.NUM_ROWS, c.COMMENTS AS TABLE_COMMENT
+         FROM USER_TABLES t
+         LEFT JOIN USER_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME`,
         []
       );
 
@@ -481,13 +483,18 @@ export class DMAdapter implements DbAdapter {
     }
 
     // 按表名分组行数统计
-    // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS
+    // 列顺序: 0=TABLE_NAME, 1=NUM_ROWS, 2=TABLE_COMMENT
     const rowsByTable = new Map<string, number>();
+    const tableCommentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       const tableName = this.getValueByIndex(stat, 0) as string;
       const numRows = this.getValueByIndex(stat, 1);
+      const tableComment = this.getValueByIndex(stat, 2) as string;
       if (tableName) {
         rowsByTable.set(tableName, Number(numRows) || 0);
+        if (tableComment) {
+          tableCommentsByTable.set(tableName, tableComment);
+        }
       }
     }
 
@@ -575,6 +582,7 @@ export class DMAdapter implements DbAdapter {
 
       tableInfos.push({
         name: String(tableName).toLowerCase(),
+        comment: tableCommentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,

@@ -266,12 +266,13 @@ export class OracleAdapter implements DbAdapter {
          ORDER BY i.TABLE_NAME, i.INDEX_NAME, ic.COLUMN_POSITION`
       );
 
-      // 批量获取所有表的行数估算
+      // 批量获取所有表的行数估算和表注释
       const allStatsResult = await this.connection.execute(
-        `SELECT TABLE_NAME, NUM_ROWS
-         FROM ALL_TABLES
-         WHERE OWNER = USER
-           AND TEMPORARY = 'N'`
+        `SELECT t.TABLE_NAME, t.NUM_ROWS, c.COMMENTS AS TABLE_COMMENT
+         FROM ALL_TABLES t
+         LEFT JOIN ALL_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME AND t.OWNER = c.OWNER
+         WHERE t.OWNER = USER
+           AND t.TEMPORARY = 'N'`
       );
 
       // 批量获取所有外键信息
@@ -445,10 +446,14 @@ export class OracleAdapter implements DbAdapter {
 
     // 按表名分组行数统计
     const rowsByTable = new Map<string, number>();
+    const tableCommentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       const tableName = stat.TABLE_NAME;
       if (tableName) {
         rowsByTable.set(tableName, stat.NUM_ROWS || 0);
+        if (stat.TABLE_COMMENT) {
+          tableCommentsByTable.set(tableName, stat.TABLE_COMMENT);
+        }
       }
     }
 
@@ -531,6 +536,7 @@ export class OracleAdapter implements DbAdapter {
 
       tableInfos.push({
         name: tableName.toLowerCase(),
+        comment: tableCommentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,

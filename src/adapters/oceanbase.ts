@@ -161,11 +161,12 @@ export class OceanBaseAdapter implements DbAdapter {
         ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
       `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
 
-      // 批量获取所有表的行数估算
+      // 批量获取所有表的行数估算和表注释
       const [allStats] = await this.connection.query(`
         SELECT
           TABLE_NAME,
-          TABLE_ROWS
+          TABLE_ROWS,
+          TABLE_COMMENT
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_TYPE = 'BASE TABLE'
@@ -267,8 +268,12 @@ export class OceanBaseAdapter implements DbAdapter {
     }
 
     const rowsByTable = new Map<string, number>();
+    const commentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       rowsByTable.set(stat.TABLE_NAME, stat.TABLE_ROWS || 0);
+      if (stat.TABLE_COMMENT) {
+        commentsByTable.set(stat.TABLE_NAME, stat.TABLE_COMMENT);
+      }
     }
 
     // 按表名分组外键信息
@@ -349,6 +354,7 @@ export class OceanBaseAdapter implements DbAdapter {
 
       tableInfos.push({
         name: tableName,
+        comment: commentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,

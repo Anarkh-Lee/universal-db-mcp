@@ -2,6 +2,26 @@
 
 本文档记录 Universal DB MCP 的版本更新历史。
 
+## [2.8.0] - 2026
+
+### 新增
+- **Schema 核心增强** - 提升 LLM 对数据库结构的理解，提高 Text2SQL 准确性
+  - **表注释支持** - Schema 信息现在包含表级别注释（`comment` 字段）
+    - 支持的数据库：MySQL、PostgreSQL、Oracle、SQL Server、TiDB、达梦、KingbaseES、GaussDB、OceanBase、PolarDB、Vastbase、HighGo、GoldenDB、ClickHouse（14个）
+    - 不支持：Redis、MongoDB（NoSQL）、SQLite（无原生表注释）
+  - **隐式关系推断** - 基于列命名规则自动推断表间关系
+    - 支持模式：`xxx_id` → `xxxs.id`、`xxxId` → `xxxs.id`（驼峰）、`xxx_code` → `xxxs.code`、`xxx_no` → `xxxs.xxx_no`
+    - 推断规则：不覆盖显式外键、验证目标表存在、验证目标列存在
+    - 置信度评分：0.7-0.95，LLM 可根据置信度判断关系可靠性
+  - **关系类型细化** - 通过检查唯一约束区分 `one-to-one` 和 `many-to-one`
+  - **关系来源标注** - `source` 字段区分 `foreign_key`（显式外键）和 `inferred`（推断关系）
+
+### 改进
+- 新增 `SchemaEnhancer` 工具类（`src/utils/schema-enhancer.ts`）
+- 更新 `RelationshipInfo` 类型，添加 `source` 和 `confidence` 字段
+- 更新 `TableInfo` 类型，添加 `comment` 字段
+- 更新 14 个数据库适配器，添加表注释查询支持
+
 ## [2.7.0] - 2026
 
 ### 新增

@@ -168,7 +168,8 @@ export class MySQLAdapter implements DbAdapter {
       const [allStats] = await this.connection.query(`
         SELECT
           TABLE_NAME,
-          TABLE_ROWS
+          TABLE_ROWS,
+          TABLE_COMMENT
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_TYPE = 'BASE TABLE'
@@ -274,8 +275,12 @@ export class MySQLAdapter implements DbAdapter {
 
     // 按表名分组行数统计
     const rowsByTable = new Map<string, number>();
+    const commentsByTable = new Map<string, string>();
     for (const stat of allStats) {
       rowsByTable.set(stat.TABLE_NAME, stat.TABLE_ROWS || 0);
+      if (stat.TABLE_COMMENT) {
+        commentsByTable.set(stat.TABLE_NAME, stat.TABLE_COMMENT);
+      }
     }
 
     // 按表名分组外键信息
@@ -357,6 +362,7 @@ export class MySQLAdapter implements DbAdapter {
 
       tableInfos.push({
         name: tableName,
+        comment: commentsByTable.get(tableName) || undefined,
         columns,
         primaryKeys: primaryKeysByTable.get(tableName) || [],
         indexes: indexInfos,
