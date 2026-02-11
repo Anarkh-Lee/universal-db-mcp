@@ -68,15 +68,17 @@ export class DMAdapter implements DbAdapter {
     try {
       const DM = await loadDMDB();
 
-      // 达梦数据库连接配置
+      //兼容
       const connectionConfig = {
-        host: this.config.host,
-        port: this.config.port || 5236, // 达梦默认端口
+      
+        connectString: `${this.config.host}:${this.config.port || 5236}`,
+        
         user: this.config.user,
         password: this.config.password,
-        database: this.config.database,
-        // 禁用消息加密以避免 OpenSSL 3.0 兼容性问题
-        // 如果需要加密连接，请确保达梦数据库服务器配置了兼容的加密算法
+        // 将用户传入的 database 映射到 schema 属性
+        schema: this.config.database, 
+        
+        // 4. 固定参数
         cipherPath: '',
         loginEncrypt: false,
       };
