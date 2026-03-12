@@ -4,6 +4,7 @@
  * KingbaseES 基于 PostgreSQL 开发，兼容 PostgreSQL 协议
  *
  * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
+ * 连接管理：使用连接池 + TCP Keep-Alive + 断线自动重试，确保长连接稳定性
  */
 
 import pg from 'pg';
@@ -19,10 +20,10 @@ import type {
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
-const { Client } = pg;
+const { Pool } = pg;
 
 export class KingbaseAdapter implements DbAdapter {
-  private client: pg.Client | null = null;
+  private pool: pg.Pool | null = null;
   private config: {
     host: string;
     port: number;
@@ -42,22 +43,47 @@ export class KingbaseAdapter implements DbAdapter {
   }
 
   /**
+   * 检测是否为连接断开类错误
+   */
+  private isConnectionError(error: unknown): boolean {
+    const msg = String((error as any)?.message || '');
+    const code = String((error as any)?.code || '');
+    return /Connection terminated|ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|57P01|57P03|08003|08006/.test(msg + code);
+  }
+
+  /**
+   * 带断线重试的操作包装器（连接池会自动提供新连接）
+   */
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (this.isConnectionError(error)) {
+        return await fn();
+      }
+      throw error;
+    }
+  }
+
+  /**
    * 连接到 KingbaseES 数据库
    */
   async connect(): Promise<void> {
     try {
-      this.client = new Client({
+      this.pool = new Pool({
         host: this.config.host,
         port: this.config.port,
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
+        max: 3,
+        idleTimeoutMillis: 60000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 30000,
       });
 
-      await this.client.connect();
-
       // 测试连接
-      await this.client.query('SELECT 1');
+      await this.pool.query('SELECT 1');
     } catch (error) {
       throw new Error(
         `KingbaseES 连接失败: ${error instanceof Error ? error.message : String(error)}`
@@ -69,9 +95,9 @@ export class KingbaseAdapter implements DbAdapter {
    * 断开数据库连接
    */
   async disconnect(): Promise<void> {
-    if (this.client) {
-      await this.client.end();
-      this.client = null;
+    if (this.pool) {
+      await this.pool.end();
+      this.pool = null;
     }
   }
 
@@ -79,14 +105,14 @@ export class KingbaseAdapter implements DbAdapter {
    * 执行 SQL 查询
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.client) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     const startTime = Date.now();
 
     try {
-      const result = await this.client.query(query, params);
+      const result = await this.withRetry(() => this.pool!.query(query, params));
       const executionTime = Date.now() - startTime;
 
       return {
@@ -112,138 +138,145 @@ export class KingbaseAdapter implements DbAdapter {
    * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
-    if (!this.client) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     try {
-      // 获取数据库版本
-      const versionResult = await this.client.query('SELECT version()');
-      const version = versionResult.rows[0]?.version || 'unknown';
-
-      // 获取当前数据库名
-      const dbResult = await this.client.query('SELECT current_database()');
-      const databaseName = dbResult.rows[0]?.current_database || this.config.database || 'unknown';
-
-      // 批量获取所有表的列信息
-      const allColumnsResult = await this.client.query(`
-        SELECT
-          c.table_name,
-          c.column_name,
-          c.data_type,
-          c.is_nullable,
-          c.column_default,
-          c.character_maximum_length,
-          c.numeric_precision,
-          c.numeric_scale,
-          c.ordinal_position
-        FROM information_schema.columns c
-        JOIN information_schema.tables t
-          ON c.table_schema = t.table_schema AND c.table_name = t.table_name
-        WHERE c.table_schema = 'public'
-          AND t.table_type = 'BASE TABLE'
-        ORDER BY c.table_name, c.ordinal_position
-      `);
-
-      // 批量获取所有表的主键信息
-      const allPrimaryKeysResult = await this.client.query(`
-        SELECT
-          t.relname as table_name,
-          a.attname as column_name
-        FROM pg_index i
-        JOIN pg_class t ON t.oid = i.indrelid
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
-        JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE i.indisprimary
-          AND n.nspname = 'public'
-        ORDER BY t.relname, a.attnum
-      `);
-
-      // 批量获取所有表的索引信息
-      const allIndexesResult = await this.client.query(`
-        SELECT
-          t.relname as table_name,
-          i.relname as index_name,
-          a.attname as column_name,
-          ix.indisunique as is_unique
-        FROM pg_class t
-        JOIN pg_index ix ON t.oid = ix.indrelid
-        JOIN pg_class i ON i.oid = ix.indexrelid
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-        JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE t.relkind = 'r'
-          AND n.nspname = 'public'
-          AND NOT ix.indisprimary
-        ORDER BY t.relname, i.relname, a.attnum
-      `);
-
-      // 批量获取所有表的行数估算和表注释
-      const allStatsResult = await this.client.query(`
-        SELECT
-          c.relname as table_name,
-          c.reltuples::bigint as estimated_rows,
-          obj_description(c.oid, 'pg_class') as table_comment
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'r'
-          AND n.nspname = 'public'
-      `);
-
-      // 批量获取所有外键信息
-      let allForeignKeys: any[] = [];
-      try {
-        const allForeignKeysResult = await this.client.query(`
-          SELECT
-            c.conname AS constraint_name,
-            t.relname AS table_name,
-            a.attname AS column_name,
-            rt.relname AS referenced_table,
-            ra.attname AS referenced_column,
-            CASE c.confdeltype
-              WHEN 'a' THEN 'NO ACTION'
-              WHEN 'r' THEN 'RESTRICT'
-              WHEN 'c' THEN 'CASCADE'
-              WHEN 'n' THEN 'SET NULL'
-              WHEN 'd' THEN 'SET DEFAULT'
-            END AS delete_rule,
-            CASE c.confupdtype
-              WHEN 'a' THEN 'NO ACTION'
-              WHEN 'r' THEN 'RESTRICT'
-              WHEN 'c' THEN 'CASCADE'
-              WHEN 'n' THEN 'SET NULL'
-              WHEN 'd' THEN 'SET DEFAULT'
-            END AS update_rule,
-            array_position(c.conkey, a.attnum) AS column_position
-          FROM pg_constraint c
-          JOIN pg_class t ON t.oid = c.conrelid
-          JOIN pg_class rt ON rt.oid = c.confrelid
-          JOIN pg_namespace n ON n.oid = t.relnamespace
-          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
-          JOIN pg_attribute ra ON ra.attrelid = rt.oid AND ra.attnum = c.confkey[array_position(c.conkey, a.attnum)]
-          WHERE c.contype = 'f'
-            AND n.nspname = 'public'
-          ORDER BY t.relname, c.conname, array_position(c.conkey, a.attnum)
-        `);
-        allForeignKeys = allForeignKeysResult.rows;
-      } catch (error) {
-        // 外键查询失败时忽略，返回空数组
-        console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
-      }
-
-      return this.assembleSchema(
-        databaseName,
-        version,
-        allColumnsResult.rows,
-        allPrimaryKeysResult.rows,
-        allIndexesResult.rows,
-        allStatsResult.rows,
-        allForeignKeys
-      );
+      return await this.withRetry(() => this._getSchemaImpl());
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  /**
+   * getSchema 内部实现
+   */
+  private async _getSchemaImpl(): Promise<SchemaInfo> {
+    // 获取数据库版本
+    const versionResult = await this.pool!.query('SELECT version()');
+    const version = versionResult.rows[0]?.version || 'unknown';
+
+    // 获取当前数据库名
+    const dbResult = await this.pool!.query('SELECT current_database()');
+    const databaseName = dbResult.rows[0]?.current_database || this.config.database || 'unknown';
+
+    // 批量获取所有表的列信息
+    const allColumnsResult = await this.pool!.query(`
+      SELECT
+        c.table_name,
+        c.column_name,
+        c.data_type,
+        c.is_nullable,
+        c.column_default,
+        c.character_maximum_length,
+        c.numeric_precision,
+        c.numeric_scale,
+        c.ordinal_position
+      FROM information_schema.columns c
+      JOIN information_schema.tables t
+        ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+      WHERE c.table_schema = 'public'
+        AND t.table_type = 'BASE TABLE'
+      ORDER BY c.table_name, c.ordinal_position
+    `);
+
+    // 批量获取所有表的主键信息
+    const allPrimaryKeysResult = await this.pool!.query(`
+      SELECT
+        t.relname as table_name,
+        a.attname as column_name
+      FROM pg_index i
+      JOIN pg_class t ON t.oid = i.indrelid
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE i.indisprimary
+        AND n.nspname = 'public'
+      ORDER BY t.relname, a.attnum
+    `);
+
+    // 批量获取所有表的索引信息
+    const allIndexesResult = await this.pool!.query(`
+      SELECT
+        t.relname as table_name,
+        i.relname as index_name,
+        a.attname as column_name,
+        ix.indisunique as is_unique
+      FROM pg_class t
+      JOIN pg_index ix ON t.oid = ix.indrelid
+      JOIN pg_class i ON i.oid = ix.indexrelid
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE t.relkind = 'r'
+        AND n.nspname = 'public'
+        AND NOT ix.indisprimary
+      ORDER BY t.relname, i.relname, a.attnum
+    `);
+
+    // 批量获取所有表的行数估算和表注释
+    const allStatsResult = await this.pool!.query(`
+      SELECT
+        c.relname as table_name,
+        c.reltuples::bigint as estimated_rows,
+        obj_description(c.oid, 'pg_class') as table_comment
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind = 'r'
+        AND n.nspname = 'public'
+    `);
+
+    // 批量获取所有外键信息
+    let allForeignKeys: any[] = [];
+    try {
+      const allForeignKeysResult = await this.pool!.query(`
+        SELECT
+          c.conname AS constraint_name,
+          t.relname AS table_name,
+          a.attname AS column_name,
+          rt.relname AS referenced_table,
+          ra.attname AS referenced_column,
+          CASE c.confdeltype
+            WHEN 'a' THEN 'NO ACTION'
+            WHEN 'r' THEN 'RESTRICT'
+            WHEN 'c' THEN 'CASCADE'
+            WHEN 'n' THEN 'SET NULL'
+            WHEN 'd' THEN 'SET DEFAULT'
+          END AS delete_rule,
+          CASE c.confupdtype
+            WHEN 'a' THEN 'NO ACTION'
+            WHEN 'r' THEN 'RESTRICT'
+            WHEN 'c' THEN 'CASCADE'
+            WHEN 'n' THEN 'SET NULL'
+            WHEN 'd' THEN 'SET DEFAULT'
+          END AS update_rule,
+          array_position(c.conkey, a.attnum) AS column_position
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_class rt ON rt.oid = c.confrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        JOIN pg_attribute ra ON ra.attrelid = rt.oid AND ra.attnum = c.confkey[array_position(c.conkey, a.attnum)]
+        WHERE c.contype = 'f'
+          AND n.nspname = 'public'
+        ORDER BY t.relname, c.conname, array_position(c.conkey, a.attnum)
+      `);
+      allForeignKeys = allForeignKeysResult.rows;
+    } catch (error) {
+      // 外键查询失败时忽略，返回空数组
+      console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
+    }
+
+    return this.assembleSchema(
+      databaseName,
+      version,
+      allColumnsResult.rows,
+      allPrimaryKeysResult.rows,
+      allIndexesResult.rows,
+      allStatsResult.rows,
+      allForeignKeys
+    );
   }
 
   /**

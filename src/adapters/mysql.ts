@@ -3,6 +3,7 @@
  * 使用 mysql2 驱动实现 DbAdapter 接口
  *
  * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
+ * 连接管理：使用连接池 + TCP Keep-Alive + 断线自动重试，确保长连接稳定性
  */
 
 import mysql from 'mysql2/promise';
@@ -19,7 +20,7 @@ import type {
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
 export class MySQLAdapter implements DbAdapter {
-  private connection: mysql.Connection | null = null;
+  private pool: mysql.Pool | null = null;
   private config: {
     host: string;
     port: number;
@@ -39,22 +40,51 @@ export class MySQLAdapter implements DbAdapter {
   }
 
   /**
+   * 检测是否为连接断开类错误
+   */
+  private isConnectionError(error: unknown): boolean {
+    const msg = String((error as any)?.message || '');
+    return /closed state|ECONNRESET|EPIPE|ETIMEDOUT|PROTOCOL_CONNECTION_LOST|Connection lost|ECONNREFUSED/.test(msg);
+  }
+
+  /**
+   * 带断线重试的操作包装器（连接池会自动提供新连接）
+   */
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (this.isConnectionError(error)) {
+        return await fn();
+      }
+      throw error;
+    }
+  }
+
+  /**
    * 连接到 MySQL 数据库
    */
   async connect(): Promise<void> {
     try {
-      this.connection = await mysql.createConnection({
+      this.pool = mysql.createPool({
         host: this.config.host,
         port: this.config.port,
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
-        // 启用多语句查询支持
         multipleStatements: false,
+        // 连接池配置
+        waitForConnections: true,
+        connectionLimit: 3,
+        maxIdle: 1,
+        idleTimeout: 60000,
+        // TCP Keep-Alive：防止连接被服务端或中间件超时关闭
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 30000,
       });
 
       // 测试连接
-      await this.connection.ping();
+      await this.pool.query('SELECT 1');
     } catch (error) {
       throw new Error(
         `MySQL 连接失败: ${error instanceof Error ? error.message : String(error)}`
@@ -66,9 +96,9 @@ export class MySQLAdapter implements DbAdapter {
    * 断开数据库连接
    */
   async disconnect(): Promise<void> {
-    if (this.connection) {
-      await this.connection.end();
-      this.connection = null;
+    if (this.pool) {
+      await this.pool.end();
+      this.pool = null;
     }
   }
 
@@ -76,14 +106,14 @@ export class MySQLAdapter implements DbAdapter {
    * 执行 SQL 查询
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.connection) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     const startTime = Date.now();
 
     try {
-      const [rows, fields] = await this.connection.execute(query, params);
+      const [rows, fields] = await this.withRetry(() => this.pool!.execute(query, params));
       const executionTime = Date.now() - startTime;
 
       // 处理不同类型的查询结果
@@ -122,93 +152,100 @@ export class MySQLAdapter implements DbAdapter {
    * 优化后：只需要 4 次查询获取所有表的信息
    */
   async getSchema(): Promise<SchemaInfo> {
-    if (!this.connection) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     try {
-      // 获取数据库版本
-      const [versionRows] = await this.connection.query('SELECT VERSION() as version');
-      const version = (versionRows as any[])[0]?.version || 'unknown';
-
-      // 获取当前数据库名
-      const [dbRows] = await this.connection.query('SELECT DATABASE() as db');
-      const databaseName = (dbRows as any[])[0]?.db || this.config.database || 'unknown';
-
-      // 批量获取所有表的列信息
-      const [allColumns] = await this.connection.query(`
-        SELECT
-          TABLE_NAME,
-          COLUMN_NAME,
-          COLUMN_TYPE,
-          IS_NULLABLE,
-          COLUMN_DEFAULT,
-          COLUMN_KEY,
-          COLUMN_COMMENT,
-          ORDINAL_POSITION
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-        ORDER BY TABLE_NAME, ORDINAL_POSITION
-      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
-
-      // 批量获取所有表的索引信息
-      const [allIndexes] = await this.connection.query(`
-        SELECT
-          TABLE_NAME,
-          INDEX_NAME,
-          COLUMN_NAME,
-          NON_UNIQUE,
-          SEQ_IN_INDEX
-        FROM INFORMATION_SCHEMA.STATISTICS
-        WHERE TABLE_SCHEMA = DATABASE()
-        ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
-      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
-
-      // 批量获取所有表的行数估算
-      const [allStats] = await this.connection.query(`
-        SELECT
-          TABLE_NAME,
-          TABLE_ROWS,
-          TABLE_COMMENT
-        FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_TYPE = 'BASE TABLE'
-      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
-
-      // 批量获取所有外键信息
-      let allForeignKeys: mysql.RowDataPacket[] = [];
-      try {
-        const [fkRows] = await this.connection.query(`
-          SELECT
-            kcu.TABLE_NAME,
-            kcu.CONSTRAINT_NAME,
-            kcu.COLUMN_NAME,
-            kcu.REFERENCED_TABLE_NAME,
-            kcu.REFERENCED_COLUMN_NAME,
-            kcu.ORDINAL_POSITION,
-            rc.DELETE_RULE,
-            rc.UPDATE_RULE
-          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-          JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-            ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
-            AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-          WHERE kcu.TABLE_SCHEMA = DATABASE()
-            AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-          ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-        `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
-        allForeignKeys = fkRows;
-      } catch (error) {
-        // 外键查询失败时忽略，返回空数组
-        console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
-      }
-
-      // 在内存中组装数据
-      return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats, allForeignKeys);
+      return await this.withRetry(() => this._getSchemaImpl());
     } catch (error) {
       throw new Error(
         `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  /**
+   * getSchema 内部实现
+   */
+  private async _getSchemaImpl(): Promise<SchemaInfo> {
+    // 获取数据库版本
+    const [versionRows] = await this.pool!.query('SELECT VERSION() as version');
+    const version = (versionRows as any[])[0]?.version || 'unknown';
+
+    // 获取当前数据库名
+    const [dbRows] = await this.pool!.query('SELECT DATABASE() as db');
+    const databaseName = (dbRows as any[])[0]?.db || this.config.database || 'unknown';
+
+    // 批量获取所有表的列信息
+    const [allColumns] = await this.pool!.query(`
+      SELECT
+        TABLE_NAME,
+        COLUMN_NAME,
+        COLUMN_TYPE,
+        IS_NULLABLE,
+        COLUMN_DEFAULT,
+        COLUMN_KEY,
+        COLUMN_COMMENT,
+        ORDINAL_POSITION
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+      ORDER BY TABLE_NAME, ORDINAL_POSITION
+    `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+
+    // 批量获取所有表的索引信息
+    const [allIndexes] = await this.pool!.query(`
+      SELECT
+        TABLE_NAME,
+        INDEX_NAME,
+        COLUMN_NAME,
+        NON_UNIQUE,
+        SEQ_IN_INDEX
+      FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+      ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
+    `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+
+    // 批量获取所有表的行数估算
+    const [allStats] = await this.pool!.query(`
+      SELECT
+        TABLE_NAME,
+        TABLE_ROWS,
+        TABLE_COMMENT
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_TYPE = 'BASE TABLE'
+    `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+
+    // 批量获取所有外键信息
+    let allForeignKeys: mysql.RowDataPacket[] = [];
+    try {
+      const [fkRows] = await this.pool!.query(`
+        SELECT
+          kcu.TABLE_NAME,
+          kcu.CONSTRAINT_NAME,
+          kcu.COLUMN_NAME,
+          kcu.REFERENCED_TABLE_NAME,
+          kcu.REFERENCED_COLUMN_NAME,
+          kcu.ORDINAL_POSITION,
+          rc.DELETE_RULE,
+          rc.UPDATE_RULE
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+        JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+          ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+          AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+        WHERE kcu.TABLE_SCHEMA = DATABASE()
+          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+      `) as [mysql.RowDataPacket[], mysql.FieldPacket[]];
+      allForeignKeys = fkRows;
+    } catch (error) {
+      // 外键查询失败时忽略，返回空数组
+      console.error('获取外键信息失败，跳过:', error instanceof Error ? error.message : String(error));
+    }
+
+    // 在内存中组装数据
+    return this.assembleSchema(databaseName, version, allColumns, allIndexes, allStats, allForeignKeys);
   }
 
   /**

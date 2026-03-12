@@ -2,6 +2,19 @@
 
 本文档记录 Universal DB MCP 的版本更新历史。
 
+## [2.11.0] - 2026
+
+### 改进
+- **连接稳定性增强** - 全面升级数据库连接管理，彻底解决 `Can't add new command when connection is in closed state` 错误
+  - **连接池化** - 12 个网络数据库适配器从单连接升级为连接池
+    - MySQL 系列（MySQL、TiDB、OceanBase、PolarDB、GoldenDB）：使用 `mysql2` 连接池，配置 `enableKeepAlive` + `connectionLimit: 3`
+    - PostgreSQL 系列（PostgreSQL、KingbaseES、GaussDB、Vastbase、HighGo）：使用 `pg.Pool`，配置 `keepAlive` + `max: 3`
+    - Oracle：使用 `oracledb.createPool()`，配置 `poolPingInterval: 30`
+  - **心跳保活** - 达梦适配器使用定时心跳（30 秒间隔）保持连接活跃
+  - **断线自动重试** - 所有网络数据库适配器新增 `withRetry` 机制，连接断开后自动重试一次
+  - **TCP Keep-Alive** - 所有连接池启用 TCP Keep-Alive，防止连接被服务端或中间件超时关闭
+- 不需要修改的适配器（已有内置机制）：SQL Server（连接池）、Redis（自动重连）、MongoDB（内置连接池）、SQLite（本地文件）、ClickHouse（HTTP 协议）
+
 ## [2.10.0] - 2026
 
 ### 新增

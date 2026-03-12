@@ -59,7 +59,7 @@
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │                      数据库适配器层                                │  │
 │  │  MySQL │ PostgreSQL │ Redis │ Oracle │ MongoDB │ SQLite │ ...    │  │
-│  │                      （17 个适配器）                               │  │
+│  │    （17 个适配器，连接池 + TCP Keep-Alive + 断线自动重试）        │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -281,11 +281,17 @@ interface DbAdapter {
 
 ### 适配器分类
 
-| 类型 | 适配器 | 驱动 |
-|------|--------|------|
-| MySQL 兼容 | mysql, tidb, oceanbase, polardb, goldendb | mysql2 |
-| PostgreSQL 兼容 | postgres, kingbase, gaussdb, vastbase, highgo | pg |
-| 其他 | oracle, sqlserver, mongodb, redis, sqlite, clickhouse | 各自驱动 |
+| 类型 | 适配器 | 驱动 | 连接管理 |
+|------|--------|------|---------|
+| MySQL 兼容 | mysql, tidb, oceanbase, polardb, goldendb | mysql2 | 连接池 + TCP Keep-Alive + 断线重试 |
+| PostgreSQL 兼容 | postgres, kingbase, gaussdb, vastbase, highgo | pg | 连接池 + TCP Keep-Alive + 断线重试 |
+| Oracle | oracle | oracledb | 连接池 + Pool Ping + 断线重试 |
+| 达梦 | dm | dmdb | 单连接 + 心跳保活 + 断线重连重试 |
+| SQL Server | sqlserver | mssql | 内置连接池 |
+| Redis | redis | ioredis | 内置自动重连 |
+| MongoDB | mongodb | mongodb | 内置连接池 |
+| SQLite | sqlite | better-sqlite3 | 本地文件（无需连接管理） |
+| ClickHouse | clickhouse | @clickhouse/client | HTTP 协议（无需长连接管理） |
 
 ## 数据流
 

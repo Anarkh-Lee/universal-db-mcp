@@ -42,7 +42,9 @@
       "Bash(npx vitest run:*)",
       "Bash(git checkout:*)",
       "Bash(MODE=mcp node:*)",
-      "Bash(npx .:*)"
+      "Bash(npx .:*)",
+      "Bash(npx tsc:*)",
+      "Bash(grep:*)"
     ]
   }
 }

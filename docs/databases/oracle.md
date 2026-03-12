@@ -197,6 +197,14 @@ GRANT SELECT ON schema.table_name TO mcp_readonly;
 4. **字符集** - 建议使用 AL32UTF8
 5. **Thick 模式** - 启用后会输出日志 `🔧 Oracle Thick 模式已启用`
 
+## 连接稳定性
+
+MCP 服务内置了完善的连接管理机制，无需额外配置：
+
+- **连接池** - 使用 oracledb 连接池（最小 1、最大 3 个连接），自动管理连接生命周期
+- **Pool Ping** - 每 30 秒自动检测连接健康状态（`poolPingInterval: 30`）
+- **断线自动重试** - 检测到连接断开（如 `NJS-500`、`ORA-03114`）时自动重试
+
 ## 常见问题
 
 ### ORA-12541: TNS:no listener

@@ -5,6 +5,8 @@
  * dmdb 驱动会作为可选依赖自动安装
  *
  * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
+ *
+ * 连接管理：使用心跳保活 + 断线自动重连 + 操作自动重试，确保长连接稳定性
  */
 
 import type {
@@ -43,6 +45,8 @@ async function loadDMDB() {
 
 export class DMAdapter implements DbAdapter {
   private connection: any = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private connectionConfig: any = null;
   private config: {
     host: string;
     port: number;
@@ -59,6 +63,44 @@ export class DMAdapter implements DbAdapter {
     database?: string;
   }) {
     this.config = config;
+  }
+
+  private isConnectionError(error: unknown): boolean {
+    const msg = String((error as any)?.message || '');
+    return /closed|ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|网络|连接/.test(msg);
+  }
+
+  private async reconnect(): Promise<void> {
+    try {
+      if (this.connection) { try { await this.connection.close(); } catch {} this.connection = null; }
+      const DM = await loadDMDB();
+      this.connection = await DM.getConnection(this.connectionConfig);
+      console.error('达梦数据库重连成功');
+    } catch (error) {
+      console.error('达梦数据库重连失败:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(async () => {
+      try {
+        if (this.connection) { await this.connection.execute('SELECT 1 FROM DUAL', []); }
+      } catch {
+        await this.reconnect();
+      }
+    }, 30000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try { return await fn(); } catch (error) {
+      if (this.isConnectionError(error)) { await this.reconnect(); return await fn(); }
+      throw error;
+    }
   }
 
   /**
@@ -82,9 +124,11 @@ export class DMAdapter implements DbAdapter {
       };
 
       this.connection = await DM.getConnection(connectionConfig);
+      this.connectionConfig = connectionConfig;
 
       // 测试连接
       await this.connection.execute('SELECT 1 FROM DUAL', []);
+      this.startHeartbeat();
     } catch (error: any) {
       // 翻译常见错误
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -103,6 +147,7 @@ export class DMAdapter implements DbAdapter {
    * 断开数据库连接
    */
   async disconnect(): Promise<void> {
+    this.stopHeartbeat();
     if (this.connection) {
       try {
         await this.connection.close();
@@ -131,9 +176,9 @@ export class DMAdapter implements DbAdapter {
       }
 
       // 执行查询
-      const result = await this.connection.execute(cleanQuery, params || [], {
+      const result: any = await this.withRetry(() => this.connection.execute(cleanQuery, params || [], {
         autoCommit: false,
-      });
+      }));
 
       const executionTime = Date.now() - startTime;
 
@@ -199,6 +244,15 @@ export class DMAdapter implements DbAdapter {
     }
 
     try {
+      return await this.withRetry(() => this._getSchemaImpl());
+    } catch (error) {
+      throw new Error(
+        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async _getSchemaImpl(): Promise<SchemaInfo> {
       // 获取达梦数据库版本
       const versionResult = await this.connection.execute(
         `SELECT BANNER FROM V$VERSION WHERE ROWNUM = 1`,
@@ -316,11 +370,6 @@ export class DMAdapter implements DbAdapter {
         allStatsResult.rows || [],
         allForeignKeys
       );
-    } catch (error) {
-      throw new Error(
-        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
   }
 
   /**

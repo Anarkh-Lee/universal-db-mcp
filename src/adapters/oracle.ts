@@ -3,6 +3,7 @@
  * 使用 oracledb 驱动实现 DbAdapter 接口
  *
  * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
+ * 连接管理：使用连接池 + 连接健康检测 + 断线自动重试，确保长连接稳定性
  */
 
 import oracledb from 'oracledb';
@@ -19,7 +20,7 @@ import type {
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
 export class OracleAdapter implements DbAdapter {
-  private connection: oracledb.Connection | null = null;
+  private pool: oracledb.Pool | null = null;
   private config: {
     host: string;
     port: number;
@@ -67,6 +68,22 @@ export class OracleAdapter implements DbAdapter {
     oracledb.fetchAsString = [oracledb.CLOB];
   }
 
+  private isConnectionError(error: unknown): boolean {
+    const msg = String((error as any)?.message || '');
+    const errNum = (error as any)?.errorNum;
+    return /NJS-003|NJS-500|NJS-521|DPI-1010|DPI-1080|ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED/.test(msg) ||
+      [3113, 3114, 3135, 12170, 12571, 28547].includes(errNum);
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try { return await fn(); } catch (error) { if (this.isConnectionError(error)) { return await fn(); } throw error; }
+  }
+
+  private async withConnection<T>(fn: (conn: oracledb.Connection) => Promise<T>): Promise<T> {
+    const connection = await this.pool!.getConnection();
+    try { return await fn(connection); } finally { await connection.close(); }
+  }
+
   /**
    * 构建 Oracle 连接字符串
    */
@@ -94,27 +111,23 @@ export class OracleAdapter implements DbAdapter {
   async connect(): Promise<void> {
     try {
       const connectionString = this.buildConnectionString();
-
-      this.connection = await oracledb.getConnection({
+      this.pool = await oracledb.createPool({
         user: this.config.user,
         password: this.config.password,
         connectString: connectionString,
+        poolMin: 1,
+        poolMax: 3,
+        poolTimeout: 60,
+        poolPingInterval: 30,
       });
-
       // 测试连接
-      await this.connection.execute('SELECT 1 FROM DUAL');
+      const connection = await this.pool.getConnection();
+      try { await connection.execute('SELECT 1 FROM DUAL'); } finally { await connection.close(); }
     } catch (error: any) {
-      // 翻译常见的 Oracle 错误
-      if (error.errorNum === 1017) {
-        throw new Error('Oracle 连接失败: 用户名或密码无效');
-      } else if (error.errorNum === 12154) {
-        throw new Error('Oracle 连接失败: 无法解析连接标识符，请检查 TNS 配置');
-      } else if (error.errorNum === 12541) {
-        throw new Error('Oracle 连接失败: TNS 无监听程序');
-      }
-      throw new Error(
-        `Oracle 连接失败: ${error instanceof Error ? error.message : String(error)}`
-      );
+      if (error.errorNum === 1017) throw new Error('Oracle 连接失败: 用户名或密码无效');
+      else if (error.errorNum === 12154) throw new Error('Oracle 连接失败: 无法解析连接标识符，请检查 TNS 配置');
+      else if (error.errorNum === 12541) throw new Error('Oracle 连接失败: TNS 无监听程序');
+      throw new Error(`Oracle 连接失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -122,13 +135,9 @@ export class OracleAdapter implements DbAdapter {
    * 断开数据库连接
    */
   async disconnect(): Promise<void> {
-    if (this.connection) {
-      try {
-        await this.connection.close();
-      } catch (error) {
-        // 忽略关闭连接时的错误
-      }
-      this.connection = null;
+    if (this.pool) {
+      try { await this.pool.close(0); } catch {}
+      this.pool = null;
     }
   }
 
@@ -136,69 +145,27 @@ export class OracleAdapter implements DbAdapter {
    * 执行 SQL 查询
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.connection) {
-      throw new Error('数据库未连接');
-    }
-
+    if (!this.pool) throw new Error('数据库未连接');
     const startTime = Date.now();
-
     try {
-      // Oracle 不需要末尾的分号，移除它以避免 ORA-00933 错误
-      let cleanQuery = query.trim();
-      if (cleanQuery.endsWith(';')) {
-        cleanQuery = cleanQuery.slice(0, -1).trim();
-      }
-
-      // 执行查询，autoCommit 设置为 false（只读安全）
-      const result = await this.connection.execute(cleanQuery, params || [], {
-        autoCommit: false,
-        outFormat: oracledb.OUT_FORMAT_OBJECT,
-      });
-
-      const executionTime = Date.now() - startTime;
-
-      // 处理查询结果
-      if (result.rows && result.rows.length > 0) {
-        // SELECT 查询 - 将列名转换为小写
-        const rows = result.rows.map((row: any) => {
-          const lowerCaseRow: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(row)) {
-            lowerCaseRow[key.toLowerCase()] = value;
-          }
-          return lowerCaseRow;
-        });
-
-        return {
-          rows,
-          executionTime,
-          metadata: {
-            columnCount: result.metaData?.length || 0,
-          },
-        };
-      } else if (result.rowsAffected !== undefined && result.rowsAffected > 0) {
-        // DML 操作 (INSERT/UPDATE/DELETE)
-        return {
-          rows: [],
-          affectedRows: result.rowsAffected,
-          executionTime,
-        };
-      } else {
-        // 其他操作或空结果
-        return {
-          rows: [],
-          executionTime,
-        };
-      }
+      return await this.withRetry(() => this.withConnection(async (connection) => {
+        let cleanQuery = query.trim();
+        if (cleanQuery.endsWith(';')) cleanQuery = cleanQuery.slice(0, -1).trim();
+        const result = await connection.execute(cleanQuery, params || [], { autoCommit: false, outFormat: oracledb.OUT_FORMAT_OBJECT });
+        const executionTime = Date.now() - startTime;
+        if (result.rows && result.rows.length > 0) {
+          const rows = result.rows.map((row: any) => { const r: Record<string, unknown> = {}; for (const [k, v] of Object.entries(row)) { r[k.toLowerCase()] = v; } return r; });
+          return { rows, executionTime, metadata: { columnCount: result.metaData?.length || 0 } };
+        } else if (result.rowsAffected !== undefined && result.rowsAffected > 0) {
+          return { rows: [], affectedRows: result.rowsAffected, executionTime };
+        } else {
+          return { rows: [], executionTime };
+        }
+      }));
     } catch (error: any) {
-      // 翻译常见的 Oracle 错误
-      if (error.errorNum === 942) {
-        throw new Error('查询执行失败: 表或视图不存在');
-      } else if (error.errorNum === 1) {
-        throw new Error('查询执行失败: 违反唯一约束');
-      }
-      throw new Error(
-        `查询执行失败: ${error instanceof Error ? error.message : String(error)}`
-      );
+      if (error.errorNum === 942) throw new Error('查询执行失败: 表或视图不存在');
+      else if (error.errorNum === 1) throw new Error('查询执行失败: 违反唯一约束');
+      throw new Error(`查询执行失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -206,13 +173,23 @@ export class OracleAdapter implements DbAdapter {
    * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
-    if (!this.connection) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     try {
+      return await this.withRetry(() => this._getSchemaImpl());
+    } catch (error) {
+      throw new Error(
+        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async _getSchemaImpl(): Promise<SchemaInfo> {
+    return this.withConnection(async (connection) => {
       // 获取 Oracle 版本
-      const versionResult = await this.connection.execute(
+      const versionResult = await connection.execute(
         `SELECT banner FROM v$version WHERE banner LIKE 'Oracle%'`
       );
       const version = versionResult.rows?.[0]
@@ -220,13 +197,13 @@ export class OracleAdapter implements DbAdapter {
         : 'unknown';
 
       // 获取当前用户
-      const userResult = await this.connection.execute('SELECT USER FROM DUAL');
+      const userResult = await connection.execute('SELECT USER FROM DUAL');
       const databaseName = userResult.rows?.[0]
         ? Object.values(userResult.rows[0])[0] as string
         : 'unknown';
 
       // 批量获取所有表的列信息
-      const allColumnsResult = await this.connection.execute(
+      const allColumnsResult = await connection.execute(
         `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION,
                 DATA_SCALE, NULLABLE, DATA_DEFAULT, COLUMN_ID
          FROM ALL_TAB_COLUMNS
@@ -235,7 +212,7 @@ export class OracleAdapter implements DbAdapter {
       );
 
       // 批量获取所有列注释
-      const allCommentsResult = await this.connection.execute(
+      const allCommentsResult = await connection.execute(
         `SELECT TABLE_NAME, COLUMN_NAME, COMMENTS
          FROM ALL_COL_COMMENTS
          WHERE OWNER = USER
@@ -243,7 +220,7 @@ export class OracleAdapter implements DbAdapter {
       );
 
       // 批量获取所有主键信息
-      const allPrimaryKeysResult = await this.connection.execute(
+      const allPrimaryKeysResult = await connection.execute(
         `SELECT cons.TABLE_NAME, cols.COLUMN_NAME, cols.POSITION
          FROM ALL_CONSTRAINTS cons
          JOIN ALL_CONS_COLUMNS cols
@@ -255,7 +232,7 @@ export class OracleAdapter implements DbAdapter {
       );
 
       // 批量获取所有索引信息
-      const allIndexesResult = await this.connection.execute(
+      const allIndexesResult = await connection.execute(
         `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
          FROM ALL_INDEXES i
          JOIN ALL_IND_COLUMNS ic
@@ -267,7 +244,7 @@ export class OracleAdapter implements DbAdapter {
       );
 
       // 批量获取所有表的行数估算和表注释
-      const allStatsResult = await this.connection.execute(
+      const allStatsResult = await connection.execute(
         `SELECT t.TABLE_NAME, t.NUM_ROWS, c.COMMENTS AS TABLE_COMMENT
          FROM ALL_TABLES t
          LEFT JOIN ALL_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME AND t.OWNER = c.OWNER
@@ -278,7 +255,7 @@ export class OracleAdapter implements DbAdapter {
       // 批量获取所有外键信息
       let allForeignKeys: any[] = [];
       try {
-        const allForeignKeysResult = await this.connection.execute(
+        const allForeignKeysResult = await connection.execute(
           `SELECT
             c.TABLE_NAME,
             c.CONSTRAINT_NAME,
@@ -311,11 +288,7 @@ export class OracleAdapter implements DbAdapter {
         allStatsResult.rows || [],
         allForeignKeys
       );
-    } catch (error) {
-      throw new Error(
-        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    });
   }
 
   /**

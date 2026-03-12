@@ -113,6 +113,14 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mcp_readonly
 2. **参数化查询** - 使用 $1, $2 占位符
 3. **SSL** - 生产环境建议启用 SSL
 
+## 连接稳定性
+
+MCP 服务内置了完善的连接管理机制，无需额外配置：
+
+- **连接池** - 使用 pg 连接池（最大 3 个连接），自动管理连接生命周期
+- **TCP Keep-Alive** - 启用 TCP 保活机制（30 秒初始延迟），防止连接被服务端超时关闭
+- **断线自动重试** - 检测到连接断开（如 `Connection terminated`、`ECONNRESET`）时自动重试
+
 ## 常见问题
 
 ### 连接被拒绝

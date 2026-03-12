@@ -163,6 +163,14 @@ npm install universal-db-mcp
 - 需要写入时使用 `--permission-mode readwrite` 或 `--permission-mode full`
 - 生产环境强烈建议使用只读模式
 
+## 连接稳定性
+
+MCP 服务内置了完善的连接管理机制，无需额外配置：
+
+- **心跳保活** - 每 30 秒发送心跳（`SELECT 1 FROM DUAL`），防止连接被服务端超时关闭
+- **断线自动重连** - 检测到连接断开时自动重建连接并重试操作
+- **错误检测** - 自动识别 `ECONNRESET`、`EPIPE`、`ETIMEDOUT` 等连接断开错误
+
 ## 故障排查
 
 ### 问题 1: 驱动未安装

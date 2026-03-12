@@ -60,6 +60,7 @@ AI: Let me query that for you...
 - **Batch Query Optimization** - Up to 100x faster schema retrieval for large databases
 - **Schema Enhancement** - Table comments, implicit relationship inference for better Text2SQL accuracy
 - **Data Masking** - Automatic sensitive data protection (phone, email, ID card, bank card, etc.)
+- **Connection Stability** - Connection pooling, TCP Keep-Alive, and automatic reconnection for long-running sessions
 
 ### Performance Improvements
 
@@ -236,6 +237,7 @@ See [Dify Integration Guide](./docs/integrations/DIFY.md) for detailed setup ins
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │                    Database Adapter Layer                         │  │
 │  │  MySQL │ PostgreSQL │ Redis │ Oracle │ MongoDB │ SQLite │ ...    │  │
+│  │        (Connection Pool + TCP Keep-Alive + Auto-Retry)           │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘

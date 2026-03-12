@@ -4,6 +4,7 @@
  * HighGo（瀚高）基于 PostgreSQL 开发，兼容 PostgreSQL 协议
  *
  * 性能优化：使用批量查询获取 Schema 信息，避免 N+1 查询问题
+ * 连接管理：使用连接池 + TCP Keep-Alive + 断线自动重试，确保长连接稳定性
  */
 
 import pg from 'pg';
@@ -19,10 +20,10 @@ import type {
 } from '../types/adapter.js';
 import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
-const { Client } = pg;
+const { Pool } = pg;
 
 export class HighGoAdapter implements DbAdapter {
-  private client: pg.Client | null = null;
+  private pool: pg.Pool | null = null;
   private config: {
     host: string;
     port: number;
@@ -42,22 +43,54 @@ export class HighGoAdapter implements DbAdapter {
   }
 
   /**
+   * 判断是否为连接类错误
+   */
+  private isConnectionError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const msg = error.message || '';
+    const code = (error as any).code || '';
+    return /Connection terminated|ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|57P01|57P03|08003|08006/.test(
+      msg + code
+    );
+  }
+
+  /**
+   * 带断线重试的执行包装器
+   */
+  private async withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (attempt < retries && this.isConnectionError(error)) {
+          // 重建连接池后重试
+          await this.connect();
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  /**
    * 连接到 HighGo 数据库
    */
   async connect(): Promise<void> {
     try {
-      this.client = new Client({
+      this.pool = new Pool({
         host: this.config.host,
         port: this.config.port,
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
+        max: 3,
+        idleTimeoutMillis: 60000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 30000,
       });
 
-      await this.client.connect();
-
       // 测试连接
-      await this.client.query('SELECT 1');
+      await this.pool.query('SELECT 1');
     } catch (error) {
       throw new Error(
         `HighGo 连接失败: ${error instanceof Error ? error.message : String(error)}`
@@ -69,9 +102,9 @@ export class HighGoAdapter implements DbAdapter {
    * 断开数据库连接
    */
   async disconnect(): Promise<void> {
-    if (this.client) {
-      await this.client.end();
-      this.client = null;
+    if (this.pool) {
+      await this.pool.end();
+      this.pool = null;
     }
   }
 
@@ -79,14 +112,14 @@ export class HighGoAdapter implements DbAdapter {
    * 执行 SQL 查询
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.client) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     const startTime = Date.now();
 
     try {
-      const result = await this.client.query(query, params);
+      const result = await this.withRetry(() => this.pool!.query(query, params));
       const executionTime = Date.now() - startTime;
 
       return {
@@ -112,20 +145,32 @@ export class HighGoAdapter implements DbAdapter {
    * 获取数据库结构信息（批量查询优化版本）
    */
   async getSchema(): Promise<SchemaInfo> {
-    if (!this.client) {
+    if (!this.pool) {
       throw new Error('数据库未连接');
     }
 
     try {
+      return await this.withRetry(() => this._getSchemaImpl());
+    } catch (error) {
+      throw new Error(
+        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * 获取数据库结构信息的实际实现
+   */
+  private async _getSchemaImpl(): Promise<SchemaInfo> {
       // 获取数据库版本
-      const versionResult = await this.client.query('SELECT version() as version');
+      const versionResult = await this.pool!.query('SELECT version() as version');
       const version = versionResult.rows[0]?.version || 'unknown';
 
       // 获取当前数据库名
       const databaseName = this.config.database || 'highgo';
 
       // 批量获取所有表的列信息
-      const allColumnsResult = await this.client.query(`
+      const allColumnsResult = await this.pool!.query(`
         SELECT
           c.table_name,
           c.column_name,
@@ -145,7 +190,7 @@ export class HighGoAdapter implements DbAdapter {
       `);
 
       // 批量获取所有表的主键信息
-      const allPrimaryKeysResult = await this.client.query(`
+      const allPrimaryKeysResult = await this.pool!.query(`
         SELECT
           t.relname as table_name,
           a.attname as column_name
@@ -159,7 +204,7 @@ export class HighGoAdapter implements DbAdapter {
       `);
 
       // 批量获取所有表的索引信息
-      const allIndexesResult = await this.client.query(`
+      const allIndexesResult = await this.pool!.query(`
         SELECT
           t.relname as table_name,
           i.relname as index_name,
@@ -177,7 +222,7 @@ export class HighGoAdapter implements DbAdapter {
       `);
 
       // 批量获取所有表的行数估算和表注释
-      const allStatsResult = await this.client.query(`
+      const allStatsResult = await this.pool!.query(`
         SELECT
           c.relname as table_name,
           c.reltuples::bigint as estimated_rows,
@@ -191,7 +236,7 @@ export class HighGoAdapter implements DbAdapter {
       // 批量获取所有外键信息
       let allForeignKeys: any[] = [];
       try {
-        const allForeignKeysResult = await this.client.query(`
+        const allForeignKeysResult = await this.pool!.query(`
           SELECT
             c.conname AS constraint_name,
             t.relname AS table_name,
@@ -238,11 +283,6 @@ export class HighGoAdapter implements DbAdapter {
         allStatsResult.rows,
         allForeignKeys
       );
-    } catch (error) {
-      throw new Error(
-        `获取数据库结构失败: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
   }
 
   /**

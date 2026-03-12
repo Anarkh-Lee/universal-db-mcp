@@ -121,6 +121,15 @@ GRANT SELECT ON mydb.* TO 'mcp_readonly'@'192.168.1.%';
 3. **连接数** - 注意 max_connections 限制
 4. **SSL** - 生产环境建议启用 SSL 连接
 
+## 连接稳定性
+
+MCP 服务内置了完善的连接管理机制，无需额外配置：
+
+- **连接池** - 使用 mysql2 连接池（最大 3 个连接），自动管理连接生命周期
+- **TCP Keep-Alive** - 启用 TCP 保活机制（30 秒初始延迟），防止连接被服务端 `wait_timeout` 关闭
+- **断线自动重试** - 检测到连接断开（如 `Connection in closed state`、`ECONNRESET`）时自动重试
+- 已彻底解决 `Can't add new command when connection is in closed state` 问题
+
 ## 常见问题
 
 ### 连接超时
