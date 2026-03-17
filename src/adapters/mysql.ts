@@ -73,6 +73,7 @@ export class MySQLAdapter implements DbAdapter {
         password: this.config.password,
         database: this.config.database,
         multipleStatements: false,
+        supportBigNumbers: true,
         // 连接池配置
         waitForConnections: true,
         connectionLimit: 3,

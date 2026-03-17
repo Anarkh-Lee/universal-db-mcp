@@ -309,29 +309,32 @@ export class MongoDBAdapter implements DbAdapter {
   }
 
   /**
-   * 格式化 MongoDB 文档（将 ObjectId 转换为字符串）
+   * 格式化 MongoDB 文档（将 ObjectId/Long 等 BSON 类型转换为字符串）
    */
   private formatDocument(doc: Document): Document {
     const formatted: Document = {};
 
     for (const [key, value] of Object.entries(doc)) {
-      if (value && typeof value === 'object' && '_bsontype' in value) {
-        // 处理 BSON 类型（如 ObjectId）
-        formatted[key] = value.toString();
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        // 递归处理嵌套对象
-        formatted[key] = this.formatDocument(value);
-      } else if (Array.isArray(value)) {
-        // 处理数组
-        formatted[key] = value.map(item =>
-          item && typeof item === 'object' ? this.formatDocument(item) : item
-        );
-      } else {
-        formatted[key] = value;
-      }
+      formatted[key] = this.formatValue(value);
     }
 
     return formatted;
+  }
+
+  private formatValue(value: unknown): unknown {
+    if (value && typeof value === 'object' && '_bsontype' in value) {
+      return value.toString();
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.formatValue(item));
+    }
+
+    if (value && typeof value === 'object') {
+      return this.formatDocument(value as Document);
+    }
+
+    return value;
   }
 
   /**

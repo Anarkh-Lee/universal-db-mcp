@@ -92,7 +92,60 @@ export class DatabaseService {
     // Execute query
     const result = await this.adapter.executeQuery(query, params);
 
-    return result;
+    return this.normalizeQueryResult(result);
+  }
+
+  /**
+   * 归一化查询结果中的大整数/BSON Long，避免在 JSON 输出时丢失精度
+   */
+  private normalizeQueryResult(result: QueryResult): QueryResult {
+    return {
+      ...result,
+      rows: this.normalizeForJson(result.rows) as Record<string, unknown>[],
+      metadata: result.metadata
+        ? this.normalizeForJson(result.metadata) as Record<string, unknown>
+        : undefined,
+    };
+  }
+
+  /**
+   * 递归归一化值，确保可以安全输出为 JSON
+   */
+  private normalizeForJson(value: unknown): unknown {
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+
+    if (value === null || value === undefined) {
+      return value;
+    }
+
+    if (
+      value instanceof Date ||
+      value instanceof RegExp ||
+      ArrayBuffer.isView(value) ||
+      value instanceof ArrayBuffer
+    ) {
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.normalizeForJson(item));
+    }
+
+    if (typeof value === 'object') {
+      if ('_bsontype' in value && typeof value.toString === 'function') {
+        return value.toString();
+      }
+
+      const normalized: Record<string, unknown> = {};
+      for (const [key, nestedValue] of Object.entries(value)) {
+        normalized[key] = this.normalizeForJson(nestedValue);
+      }
+      return normalized;
+    }
+
+    return value;
   }
 
   /**
@@ -367,10 +420,11 @@ export class DatabaseService {
 
     // 4. 执行查询
     const result = await this.adapter.executeQuery(query);
+    const normalizedRows = this.normalizeForJson(result.rows) as Record<string, unknown>[];
 
     // 5. 处理结果
-    const hasMore = result.rows.length > safeLimit;
-    const rows = hasMore ? result.rows.slice(0, safeLimit) : result.rows;
+    const hasMore = normalizedRows.length > safeLimit;
+    const rows = hasMore ? normalizedRows.slice(0, safeLimit) : normalizedRows;
 
     const values = rows.map(row => row.value as string | number | null);
     const valueCounts = includeCount
@@ -443,9 +497,10 @@ export class DatabaseService {
 
     // 5. 执行查询
     const result = await this.adapter.executeQuery(query);
+    const normalizedRows = this.normalizeForJson(result.rows) as Record<string, unknown>[];
 
     // 6. 脱敏处理
-    const { maskedRows, maskedColumns } = this.dataMasker.maskRows(result.rows);
+    const { maskedRows, maskedColumns } = this.dataMasker.maskRows(normalizedRows);
 
     return {
       tableName: actualTableName,
