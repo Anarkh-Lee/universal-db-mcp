@@ -74,6 +74,7 @@ export class PolarDBAdapter implements DbAdapter {
         password: this.config.password,
         database: this.config.database,
         multipleStatements: false,
+        supportBigNumbers: true,
         waitForConnections: true,
         connectionLimit: 3,
         maxIdle: 1,
